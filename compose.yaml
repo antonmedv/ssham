@@ -1,0 +1,22 @@
+services:
+  ssham:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "22:2222"
+    volumes:
+      - ./data:/data # host key and audit log
+    # Lock the container down.
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

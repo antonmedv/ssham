@@ -33,10 +33,8 @@ The bot sees `Segmentation fault`. You see the bot's URL.
 
 ## Catch real bots
 
-Point port 22 at ssham:
+Run it on port 22 with Docker: [DEPLOY.md](DEPLOY.md).
 
-```sh
-iptables -t nat -A PREROUTING -p tcp --dport 22 -j REDIRECT --to-port 2222
-```
+## License
 
-See `ssham -help` for all options.
+[MIT](LICENSE)

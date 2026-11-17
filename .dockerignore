@@ -1,0 +1,6 @@
+.git
+.idea
+.ssh
+data
+ssham
+*.jsonl
