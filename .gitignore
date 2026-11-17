@@ -1,0 +1,4 @@
+/ssham
+.ssh/
+.idea/
+*.jsonl
