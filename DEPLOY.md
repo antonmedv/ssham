@@ -62,7 +62,10 @@ sudo jq -r 'select(.msg=="auth") | .password // empty' data/ssham.jsonl | sort |
 ## Update
 
 ```sh
-git pull && docker compose up -d --build
+git pull && docker compose build --pull && docker compose up -d
 ```
+
+`--pull` fetches the latest base images, so security fixes in Go and the base image
+get in too. Run this now and then, even when there are no new commits.
 
 The host key in `./data` stays the same, so returning bots see the same server.

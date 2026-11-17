@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Go modules (Wish, Bubble Tea, x/crypto, ...).
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+
+  # Base images in the Dockerfile (golang, distroless).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
