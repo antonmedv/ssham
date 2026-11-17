@@ -5,6 +5,11 @@ package audit
 const (
 	// Connect: a TCP connection was accepted.
 	Connect = "connect"
+	// Disconnect is logged when the TCP connection closes.
+	Disconnect = "disconnect"
+	// Forward is a port forwarding request (ssh -L, -D, -R). Nothing is
+	// ever connected.
+	Forward = "forward"
 	// Auth: a login attempt. Fields: user, client_version, method,
 	// success, and password, or key_type/fingerprint/key.
 	Auth = "auth"

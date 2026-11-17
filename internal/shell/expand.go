@@ -111,6 +111,14 @@ func (s *Shell) expandOne(ctx context.Context, w string) string {
 }
 
 func (s *Shell) expandWord(ctx context.Context, raw string, split bool) []string {
+	if split && (raw == `"$@"` || raw == `"${@}"`) {
+		// Each argument is a field of its own; none at all if there are
+		// none.
+		if len(s.args) > 1 {
+			return append([]string(nil), s.args[1:]...)
+		}
+		return nil
+	}
 	e := &expander{sh: s, ctx: ctx}
 	i := 0
 	// Tilde expansion at the start of a word.
@@ -151,6 +159,18 @@ func (s *Shell) expandWord(ctx context.Context, raw string, split bool) []string
 		case '"':
 			i = e.doubleQuoted(raw, i+1)
 		case '$':
+			if strings.HasPrefix(raw[i:], "$'") {
+				// $'...': C escapes, from ash's bash extensions.
+				n, err := skipQuoted(raw[i:])
+				if err != nil || n < 2 {
+					n = len(raw) - i
+				}
+				body := raw[i+2 : max(i+2, i+n-1)]
+				lit, _ := Unescape(strings.ReplaceAll(body, `\'`, "'"))
+				e.addLit(lit, true)
+				i += n
+				continue
+			}
 			val, n, _ := e.dollar(raw[i:])
 			i += n
 			if split {
@@ -251,7 +271,7 @@ func (e *expander) dollar(s string) (string, int, bool) {
 		if strings.HasPrefix(s, "$((") {
 			end := strings.Index(s, "))")
 			if end > 0 {
-				v, err := arith(sh.expandOne(e.ctx, s[3:end]), sh.getVar)
+				v, err := arith(sh.expandOne(e.ctx, s[3:end]), sh.getVar, sh.setVar)
 				if err != nil {
 					sh.expandError(err.Error())
 				}
@@ -282,15 +302,21 @@ func (e *expander) dollar(s string) (string, int, bool) {
 		}
 		return "", 2, false
 	case c == '-':
-		return "i", 2, false
+		return sh.flags(), 2, false
 	case c == '!':
-		return "", 2, false
+		if sh.lastBg == 0 {
+			return "", 2, false
+		}
+		return strconv.Itoa(sh.lastBg), 2, false
 	case c >= '0' && c <= '9':
 		idx := int(c - '0')
 		if idx < len(sh.args) {
 			return sh.args[idx], 2, false
 		}
 		if idx == 0 {
+			if sh.cfg.Mode == RunCommand {
+				return "sh", 2, false
+			}
 			return "-sh", 2, false
 		}
 		return "", 2, false
@@ -380,6 +406,41 @@ func (e *expander) braced(expr string) string {
 			}
 			sh.expandError(name + ": " + msg)
 		}
+	case strings.HasPrefix(op, ":"):
+		// ${x:offset} and ${x:offset:length}, from ash's bash extensions.
+		offExpr, lenExpr, hasLen := strings.Cut(op[1:], ":")
+		off, err := arith(offExpr, sh.getVar, sh.setVar)
+		if err != nil {
+			sh.expandError(err.Error())
+			return ""
+		}
+		if off < 0 {
+			off = max(0, int64(len(v))+off)
+		}
+		off = min(off, int64(len(v)))
+		end := int64(len(v))
+		if hasLen {
+			n, err := arith(lenExpr, sh.getVar, sh.setVar)
+			if err != nil {
+				sh.expandError(err.Error())
+				return ""
+			}
+			if n < 0 {
+				end = max(off, end+n)
+			} else {
+				end = min(end, off+n)
+			}
+		}
+		return v[off:end]
+	case strings.HasPrefix(op, "/"):
+		// ${x/pat/rep}, ${x//pat/rep}, ${x/#pat/rep}, ${x/%pat/rep}.
+		mode := ""
+		rest := op[1:]
+		if len(rest) > 0 && strings.ContainsRune("/#%", rune(rest[0])) {
+			mode, rest = rest[:1], rest[1:]
+		}
+		pat, rep, _ := strings.Cut(rest, "/")
+		return replacePattern(v, sh.expandOne(e.ctx, pat), sh.expandOne(e.ctx, rep), mode)
 	case strings.HasPrefix(op, "##"), strings.HasPrefix(op, "#"):
 		return trimPattern(v, word(op[:strings.LastIndexByte(op[:min(2, len(op))], '#')+1]), true, op[:min(2, len(op))] == "##")
 	case strings.HasPrefix(op, "%%"), strings.HasPrefix(op, "%"):
@@ -389,6 +450,57 @@ func (e *expander) braced(expr string) string {
 		return ""
 	}
 	return v
+}
+
+// replacePattern replaces the longest match of pattern in v: the first
+// one, every one (mode "/"), or only at the start ("#") or end ("%").
+func replacePattern(v, pattern, rep, mode string) string {
+	if pattern == "" {
+		return v
+	}
+	re := patternRegexp(pattern)
+	if re == nil {
+		return v
+	}
+	match := func(s string) bool { return re.MatchString(s) }
+	switch mode {
+	case "#":
+		for j := len(v); j >= 0; j-- {
+			if match(v[:j]) {
+				return rep + v[j:]
+			}
+		}
+		return v
+	case "%":
+		for i := 0; i <= len(v); i++ {
+			if match(v[i:]) {
+				return v[:i] + rep
+			}
+		}
+		return v
+	}
+	var b strings.Builder
+	for i := 0; i < len(v); {
+		found := -1
+		for j := len(v); j > i; j-- {
+			if match(v[i:j]) {
+				found = j
+				break
+			}
+		}
+		if found < 0 {
+			b.WriteByte(v[i])
+			i++
+			continue
+		}
+		b.WriteString(rep)
+		i = found
+		if mode != "/" {
+			b.WriteString(v[i:])
+			return b.String()
+		}
+	}
+	return b.String()
 }
 
 // trimPattern removes the shortest (or longest) prefix or suffix of v
@@ -524,6 +636,23 @@ func unescapeGlob(s string) string {
 			i++
 		}
 		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// flags is $-, the shell's option letters.
+func (sh *Shell) flags() string {
+	var b strings.Builder
+	for _, f := range "efuvxnaCb" {
+		if sh.opts[byte(f)] {
+			b.WriteRune(f)
+		}
+	}
+	switch sh.cfg.Mode {
+	case LoginShell:
+		b.WriteString("smi")
+	case PipedShell:
+		b.WriteString("s")
 	}
 	return b.String()
 }

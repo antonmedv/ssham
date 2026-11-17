@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/antonmedv/ssham/internal/audit"
+	"github.com/antonmedv/ssham/internal/rootfs"
 	"github.com/antonmedv/ssham/internal/shell"
 )
 
@@ -17,7 +18,6 @@ func init() {
 		shell.Command{Name: "uptime", Dir: "/usr/bin", Usage: "", Run: cmdUptime},
 		shell.Command{Name: "free", Dir: "/usr/bin", Usage: "[-bkmgh]", Run: cmdFree},
 		shell.Command{Name: "df", Usage: "[-PkmhTai] [-B SIZE] [FILESYSTEM]...", Run: cmdDf},
-		shell.Command{Name: "dmesg", Usage: "[-c] [-n LEVEL] [-s SIZE]", Run: cmdDmesg},
 		shell.Command{Name: "mount", Usage: "[OPTIONS] [-o OPT] DEVICE NODE", Run: cmdMount},
 		shell.Command{Name: "date", Usage: "[OPTIONS] [+FMT] [TIME]", Run: cmdDate},
 		shell.Command{Name: "reboot", Dir: "/sbin", Usage: "[-d DELAY] [-n] [-f]", Run: cmdReboot},
@@ -48,7 +48,7 @@ func cmdUname(e *shell.Env) int {
 		{"s", "Linux", true},
 		{"n", hostname(e), true},
 		{"r", e.Host().Kernel, true},
-		{"v", "#1 Fri Mar 12 11:24:03 CST 2021", true},
+		{"v", "#1 Fri Mar 12 10:58:47 CST 2021", true},
 		{"m", "armv7l", true},
 		{"p", "unknown", false},
 		{"i", "unknown", false},
@@ -76,7 +76,7 @@ func cmdHostname(e *shell.Env) int {
 		e.Printf("%s\n", h)
 		return 0
 	case o.Has("i"):
-		e.Print("192.168.1.108\n")
+		e.Printf("%s\n", e.Host().IP)
 		return 0
 	case len(o.Args) > 0:
 		name = o.Args[0]
@@ -118,7 +118,8 @@ func uptimeString(d time.Duration) string {
 
 func cmdUptime(e *shell.Env) int {
 	up := e.Now().Sub(e.Host().Booted)
-	e.Printf(" %s up %s,  load average: 0.52, 0.48, 0.47\n", e.Now().In(zone).Format("15:04:05"), uptimeString(up))
+	l := rootfs.LoadAvg(e.Now())
+	e.Printf(" %s up %s,  load average: %.2f, %.2f, %.2f\n", e.Now().In(zone).Format("15:04:05"), uptimeString(up), l[0], l[1], l[2])
 	return 0
 }
 
@@ -135,8 +136,10 @@ func cmdFree(e *shell.Env) int {
 		}
 		return kb
 	}
+	m := meminfo(e)
+	cache := m["Buffers"] + m["Cached"]
 	e.Print("              total        used        free      shared  buff/cache   available\n")
-	e.Printf("Mem:    %11d %11d %11d %11d %11d %11d\n", f(59060), f(31200), f(8448), f(0), f(19412), f(25012))
+	e.Printf("Mem:    %11d %11d %11d %11d %11d %11d\n", f(m["MemTotal"]), f(m["MemTotal"]-m["MemFree"]-cache), f(m["MemFree"]), f(m["Shmem"]), f(cache), f(m["MemAvailable"]))
 	e.Printf("Swap:   %11d %11d %11d\n", f(0), f(0), f(0))
 	return 0
 }
@@ -150,7 +153,7 @@ func cmdDf(e *shell.Env) int {
 		mount             string
 	}
 	all := []fsys{
-		{"/dev/root", 5120, 5120, 0, 100, "/"},
+		{"/dev/root", 4416, 4416, 0, 100, "/"},
 		{"tmpfs", 29528, 0, 29528, 0, "/dev"},
 		{"tmpfs", 29528, 44, 29484, 0, "/tmp"},
 		{"tmpfs", 29528, 28, 29500, 0, "/var"},
@@ -179,23 +182,6 @@ func dfHuman(kb int64) string {
 		return fmt.Sprintf("%.1fK", float64(kb))
 	}
 	return fmt.Sprintf("%.1fM", float64(kb)/1024)
-}
-
-const dmesgText = `[    0.000000] Booting Linux on physical CPU 0x0
-[    0.000000] Linux version %s (builder@buildhost) (gcc version 6.3.0 (crosstool-NG 1.24.0)) #1 Fri Mar 12 11:24:03 CST 2021
-[    0.000000] CPU: ARMv7 Processor [410fc075] revision 5 (ARMv7), cr=10c5387d
-[    0.000000] Machine model: Generic DT based system
-[    0.000000] Memory policy: Data cache writealloc
-[    0.000000] Kernel command line: mem=64M console=ttyAMA0,115200 root=/dev/mtdblock3 rootfstype=squashfs
-[    0.312447] 5 cmdlinepart partitions found on MTD device sfc
-[    0.341285] VFS: Mounted root (squashfs filesystem) readonly on device 31:3.
-[    1.927731] jffs2: notice: (318) jffs2_build_xattr_subsystem: complete building xattr subsystem
-[    3.104822] eth0: link up, 100Mbps, full-duplex, lpa 0x45E1
-`
-
-func cmdDmesg(e *shell.Env) int {
-	e.Printf(dmesgText, e.Host().Kernel)
-	return 0
 }
 
 func cmdMount(e *shell.Env) int {
@@ -250,6 +236,7 @@ func cmdReboot(e *shell.Env) int {
 		return 1
 	}
 	e.Log(audit.Reboot, "command", strings.Join(e.Args, " "))
+	e.Reboot()
 	e.Exit(0)
 	return 0
 }

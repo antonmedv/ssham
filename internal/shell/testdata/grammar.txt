@@ -1,0 +1,47 @@
+// case, functions, here-documents: all in BusyBox ash.
+$ for a in x.sh bot.arm7 y; do case $a in *.sh) echo script;; bot.*|*.bin) echo binary ;; *) echo other; esac; done
+script
+binary
+other
+$ case "a b" in "a b") echo quoted;; esac; case x in (x) echo paren; esac
+quoted
+paren
+$ f() { echo "f got $# args: $1 $0"; return 3; }; f a b; echo $?
+f got 2 args: a -sh
+3
+$ g() { local x=inner; echo $x; }; x=outer; g; echo $x
+inner
+outer
+$ function h { echo bash-style; }; h
+bash-style
+$ sh -c 'k() { exit 4; }; k; echo not reached'; echo $?
+4
+$ name=world; cat <<EOF
+< hello $name
+<   "quoted" $(echo sub)
+< EOF
+> hello $name
+>   "quoted" $(echo sub)
+> EOF
+hello world
+  "quoted" sub
+$ cat <<'EOF'
+< literal $name
+< EOF
+> literal $name
+> EOF
+literal $name
+$ cat <<-EOF
+< 	tabs stripped
+< 	EOF
+> 	tabs stripped
+> 	EOF
+tabs stripped
+$ echo foo | read v; echo "[$v]"
+[]
+$ a=(1 2)
+sh: syntax error: unexpected "("
+[exit 2]
+$ f(
+sh: syntax error: unexpected "("
+[exit 2]

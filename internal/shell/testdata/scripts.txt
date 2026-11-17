@@ -22,13 +22,13 @@ $ /nope
 sh: /nope: not found
 [exit 127]
 $ echo 'sh /tmp/r.sh' > /tmp/r.sh; sh /tmp/r.sh 2>&1 | tail -1
-sh: /tmp/r.sh: maximum nesting level exceeded
+[exit 2]
 
 // BusyBox: every applet is the same binary, chosen by name.
 $ ls -l /bin/ls /sbin/reboot /usr/bin/wget
-lrwxrwxrwx 1 root root  7 Feb 10  2025 /bin/ls -> busybox
-lrwxrwxrwx 1 root root 14 Feb 10  2025 /sbin/reboot -> ../bin/busybox
-lrwxrwxrwx 1 root root 17 Feb 10  2025 /usr/bin/wget -> ../../bin/busybox
+lrwxrwxrwx    1 root     root             7 Mar 12  2021 ^[[1;36m/bin/ls^[[0m -> busybox
+lrwxrwxrwx    1 root     root            14 Mar 12  2021 ^[[1;36m/sbin/reboot^[[0m -> ../bin/busybox
+lrwxrwxrwx    1 root     root            17 Mar 12  2021 ^[[1;36m/usr/bin/wget^[[0m -> ../../bin/busybox
 $ /bin/busybox echo via busybox
 via busybox
 $ busybox nosuch

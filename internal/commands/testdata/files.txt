@@ -1,38 +1,40 @@
 $ ls /
-app  bin  dev  etc  home  lib  mnt  proc  root  sbin  sys  tmp  usr  var
+^[[1;34mapp^[[0m   ^[[1;34mdev^[[0m   ^[[1;34mhome^[[0m  ^[[1;34mmnt^[[0m   ^[[1;34mroot^[[0m  ^[[1;34msys^[[0m   ^[[1;34musr^[[0m
+^[[1;34mbin^[[0m   ^[[1;34metc^[[0m   ^[[1;34mlib^[[0m   ^[[1;34mproc^[[0m  ^[[1;34msbin^[[0m  ^[[1;34mtmp^[[0m   ^[[1;34mvar^[[0m
 $ ls -l /
-total 56
-drwxr-xr-x 3 root root 4096 Feb 10  2025 app
-drwxr-xr-x 2 root root 4096 Feb 10  2025 bin
-drwxr-xr-x 3 root root 4096 Feb 10  2025 dev
-drwxr-xr-x 4 root root 4096 Feb 10  2025 etc
-drwxr-xr-x 2 root root 4096 Feb 10  2025 home
-drwxr-xr-x 2 root root 4096 Feb 10  2025 lib
-drwxr-xr-x 3 root root 4096 Feb 10  2025 mnt
-drwxr-xr-x 3 root root 4096 Feb 10  2025 proc
-drwx------ 2 root root 4096 Feb 10  2025 root
-drwxr-xr-x 2 root root 4096 Feb 10  2025 sbin
-drwxr-xr-x 2 root root 4096 Feb 10  2025 sys
-drwxrwxrwt 2 root root 4096 Feb 10  2025 tmp
-drwxr-xr-x 5 root root 4096 Feb 10  2025 usr
-drwxr-xr-x 6 root root 4096 Feb 10  2025 var
+total 0
+drwxr-xr-x    3 root     root            27 Mar 12  2021 ^[[1;34mapp^[[0m
+drwxr-xr-x    2 root     root           486 Mar 12  2021 ^[[1;34mbin^[[0m
+drwxr-xr-x    3 root     root           440 Oct  3 15:42 ^[[1;34mdev^[[0m
+drwxr-xr-x    4 root     root           188 Mar 12  2021 ^[[1;34metc^[[0m
+drwxr-xr-x    2 root     root             3 Mar 12  2021 ^[[1;34mhome^[[0m
+drwxr-xr-x    2 root     root           186 Mar 12  2021 ^[[1;34mlib^[[0m
+drwxr-xr-x    3 root     root            14 Mar 12  2021 ^[[1;34mmnt^[[0m
+dr-xr-xr-x   36 root     root             0 Oct  3 15:42 ^[[1;34mproc^[[0m
+drwx------    2 root     root             3 Mar 12  2021 ^[[1;34mroot^[[0m
+drwxr-xr-x    2 root     root           129 Mar 12  2021 ^[[1;34msbin^[[0m
+drwxr-xr-x   12 root     root             0 Oct  3 15:42 ^[[1;34msys^[[0m
+drwxrwxrwt    2 root     root            40 Oct  3 15:42 ^[[1;34mtmp^[[0m
+drwxr-xr-x    5 root     root            37 Mar 12  2021 ^[[1;34musr^[[0m
+drwxr-xr-x    6 root     root           120 Oct  3 15:42 ^[[1;34mvar^[[0m
 $ ls -la /mnt/mtd/Config
-total 20
-drwxr-xr-x 2 root root 4096 Feb 10  2025 .
-drwxr-xr-x 3 root root 4096 Feb 10  2025 ..
--rw------- 1 root root   87 Feb 10  2025 Account
--rw-r--r-- 1 root root  130 Feb 10  2025 network.conf
--rw------- 1 root root  165 Feb 10  2025 shadow
+total 3
+drwxr-xr-x    2 root     root             0 Apr 13  2026 ^[[1;34m.^[[0m
+drwxr-xr-x    3 root     root             0 Apr 13  2026 ^[[1;34m..^[[0m
+-rw-------    1 root     root            87 Apr 13  2026 ^[[0;0mAccount^[[0m
+-rw-r--r--    1 root     root           130 Apr 13  2026 ^[[0;0mnetwork.conf^[[0m
+-rw-------    1 root     root           225 Apr 13  2026 ^[[0;0mshadow^[[0m
 $ ls -l /bin | head -4
-total 1136
-lrwxrwxrwx 1 root root       7 Feb 10  2025 ash -> busybox
--rwxr-xr-x 1 root root 1007208 Feb 10  2025 busybox
-lrwxrwxrwx 1 root root       7 Feb 10  2025 cat -> busybox
+total 1023
+lrwxrwxrwx    1 root     root             7 Mar 12  2021 ash -> busybox
+-rwxr-xr-x    1 root     root       1007208 Mar 12  2021 busybox
+lrwxrwxrwx    1 root     root             7 Mar 12  2021 cat -> busybox
 $ ls /nope
 ls: /nope: No such file or directory
 [exit 2]
 $ cat /etc/passwd /etc/hostname
 root:x:0:0:root:/root:/bin/sh
+admin:x:0:0:admin:/root:/bin/sh
 daemon:x:1:1:daemon:/usr/sbin:/bin/false
 bin:x:2:2:bin:/bin:/bin/false
 sys:x:3:3:sys:/dev:/bin/false
@@ -44,9 +46,9 @@ cat: can't open '/nope': No such file or directory
 $ cat -n /etc/hostname
      1	ipcam
 $ cd /tmp && touch t && mkdir d && ls -l
-total 4
-drwxr-xr-x 2 root root 4096 Nov 17 12:00 d
--rw-r--r-- 1 root root    0 Nov 17 12:00 t
+total 0
+drwxr-xr-x    2 root     root            40 Nov 17 20:00 ^[[1;34md^[[0m
+-rw-r--r--    1 root     root             0 Nov 17 20:00 ^[[0;0mt^[[0m
 $ mkdir /tmp/d
 mkdir: can't create directory '/tmp/d': File exists
 [exit 1]
@@ -62,7 +64,6 @@ rm: '/tmp' is a directory
 [exit 1]
 $ rm -rf /etc
 rm: can't remove '/etc/TZ': Read-only file system
-rm: can't remove '/etc/dropbear/dropbear_ecdsa_host_key': Read-only file system
 rm: can't remove '/etc/dropbear': Read-only file system
 rm: can't remove '/etc/group': Read-only file system
 rm: can't remove '/etc/hostname': Read-only file system
@@ -90,7 +91,7 @@ $ cp /etc/passwd /bin/
 cp: can't create '/bin/': Read-only file system
 [exit 1]
 $ mv /tmp/p /tmp/q && ls /tmp
-q
+^[[0;0mq^[[0m
 $ mv /etc/passwd /tmp/
 mv: can't rename '/etc/passwd': Read-only file system
 [exit 1]
@@ -100,7 +101,7 @@ $ ln -s /etc/hostname /bin/hn
 ln: /bin/hn: Read-only file system
 [exit 1]
 $ touch /tmp/m; chmod 777 /tmp/m; ls -l /tmp/m
--rwxrwxrwx 1 root root 0 Nov 17 12:00 /tmp/m
+-rwxrwxrwx    1 root     root             0 Nov 17 20:00 ^[[1;32m/tmp/m^[[0m
 $ chmod +x /etc/passwd
 chmod: /etc/passwd: Read-only file system
 [exit 1]
@@ -108,7 +109,7 @@ $ chmod bad /tmp/m
 chmod: invalid mode 'bad'
 [exit 1]
 $ chown nobody /tmp/m; ls -l /tmp/m
--rwxrwxrwx 1 nobody root 0 Nov 17 12:00 /tmp/m
+-rwxrwxrwx    1 nobody   root             0 Nov 17 20:00 ^[[1;32m/tmp/m^[[0m
 $ chown hacker /tmp/m
 chown: unknown user hacker
 [exit 1]
@@ -128,7 +129,7 @@ $ dd if=/bin/busybox bs=52 count=1 of=/tmp/hdr; ls -l /tmp/hdr
 1+0 records in
 1+0 records out
 52 bytes (52B) copied, 0.000097 seconds, 521.9KB/s
--rw-r--r-- 1 root root 52 Nov 17 12:00 /tmp/hdr
+-rw-r--r--    1 root     root            52 Nov 17 20:00 ^[[0;0m/tmp/hdr^[[0m
 $ dd if=/dev/zero of=/tmp/z bs=1k count=4
 4+0 records in
 4+0 records out
@@ -143,14 +144,14 @@ rm: can't remove '/proc/sys/kernel/hostname': Device or resource busy
 rm: can't remove '/tmp': Device or resource busy
 rm: can't remove '/var': Device or resource busy
 /tmp:
-total 8
-drwxrwxrwt  2 root root 4096 Nov 17 12:00 .
-drwxr-xr-x 16 root root 4096 Feb 10  2025 ..
+total 0
+drwxrwxrwt    2 root     root            40 Nov 17 20:00 ^[[1;34m.^[[0m
+drwxr-xr-x   16 root     root           161 Mar 12  2021 ^[[1;34m..^[[0m
 
 /mnt/mtd:
-total 8
-drwxr-xr-x 2 root root 4096 Nov 17 12:00 .
-drwxr-xr-x 3 root root 4096 Feb 10  2025 ..
-/bin/ls  /etc/passwd
+total 0
+drwxr-xr-x    2 root     root             0 Nov 17 20:00 ^[[1;34m.^[[0m
+drwxr-xr-x    3 root     root            14 Mar 12  2021 ^[[1;34m..^[[0m
+^[[1;32m/bin/ls^[[0m      ^[[0;0m/etc/passwd^[[0m
 cat: can't open '/etc/shadow': No such file or directory
 [exit 1]

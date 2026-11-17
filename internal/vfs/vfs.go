@@ -3,7 +3,10 @@
 package vfs
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"path"
 	"sort"
@@ -36,18 +39,45 @@ const (
 	maxLinkDepth    = 16
 )
 
-// Node is a file, directory, or symlink.
+// Node is a file, directory, symlink, or device.
 type Node struct {
-	Name     string
-	Mode     fs.FileMode
-	Owner    string
-	Group    string
-	ModTime  time.Time
-	Data     []byte
-	FakeSize int64  // reported size for fake binaries whose Data is a stub
+	Name    string
+	Mode    fs.FileMode
+	Owner   string
+	Group   string
+	ModTime time.Time
+	Data    []byte
+	// A program's content is made up when read: Data is its ELF header,
+	// FakeSize its full size, and Strings are text found inside it.
+	FakeSize int64
+	Strings  []string
 	Target   string // symlink target
 	Children map[string]*Node
+
+	// Device is set for /dev nodes, with their major and minor numbers.
+	Device       Device
+	Major, Minor int
+	// Virtual files, like those in /proc, report size 0.
+	Virtual bool
 }
+
+// Device is what reading and writing a device node does.
+type Device int
+
+const (
+	NotDevice Device = iota
+	DevNull          // reads nothing, discards writes
+	DevZero          // reads zeros, discards writes
+	DevRandom        // reads random bytes, discards writes
+	DevOther         // a device nothing useful comes out of
+)
+
+// deviceRead is how much one read of /dev/zero or /dev/urandom returns.
+// Real ones never end; commands stop well before this.
+const deviceRead = 1 << 20
+
+// IsDevice reports whether n is a device node.
+func (n *Node) IsDevice() bool { return n.Device != NotDevice }
 
 // IsDir reports whether n is a directory.
 func (n *Node) IsDir() bool { return n.Mode.IsDir() }
@@ -64,6 +94,8 @@ func (n *Node) Size() int64 {
 		return int64(len(n.Target))
 	case n.FakeSize > 0:
 		return n.FakeSize
+	case n.Virtual, n.IsDevice():
+		return 0
 	}
 	return int64(len(n.Data))
 }
@@ -91,6 +123,8 @@ type FS struct {
 	MaxBytes int64
 	MaxNodes int
 	Now      func() time.Time
+	// Random fills b with random bytes, for /dev/urandom.
+	Random func(b []byte)
 	// Writable lists the mount points that can be changed. Everything
 	// else is read-only, like an embedded device's squashfs root. Nil
 	// means everything is writable.
@@ -105,6 +139,7 @@ func New() *FS {
 		MaxBytes: DefaultMaxBytes,
 		MaxNodes: DefaultMaxNodes,
 		Now:      time.Now,
+		Random:   func(b []byte) { _, _ = rand.Read(b) },
 	}
 }
 
@@ -113,7 +148,7 @@ func New() *FS {
 func (f *FS) Clone() *FS {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return &FS{root: f.root.clone(), bytes: f.bytes, nodes: f.nodes, MaxBytes: f.MaxBytes, MaxNodes: f.MaxNodes, Now: f.Now, Writable: f.Writable}
+	return &FS{root: f.root.clone(), bytes: f.bytes, nodes: f.nodes, MaxBytes: f.MaxBytes, MaxNodes: f.MaxNodes, Now: f.Now, Random: f.Random, Writable: f.Writable}
 }
 
 // Abs resolves p against cwd and cleans it, without touching the tree.
@@ -226,7 +261,25 @@ func (f *FS) ReadFile(user, p string) ([]byte, error) {
 	if !canAccess(n, user, 4) {
 		return nil, ErrPermission
 	}
-	return append([]byte(nil), n.Data...), nil
+	return f.contents(n), nil
+}
+
+// contents is what reading n returns.
+func (f *FS) contents(n *Node) []byte {
+	switch n.Device {
+	case DevZero:
+		return make([]byte, deviceRead)
+	case DevRandom:
+		b := make([]byte, deviceRead)
+		f.Random(b)
+		return b
+	case DevNull, DevOther:
+		return nil
+	}
+	if n.FakeSize > int64(len(n.Data)) {
+		return programBytes(n.Data, n.FakeSize, n.Strings)
+	}
+	return append([]byte(nil), n.Data...)
 }
 
 // ReadDir returns the entries of the directory at p, sorted by name.
@@ -327,15 +380,15 @@ func (f *FS) addNode(parent *Node, n *Node) error {
 func (f *FS) WriteFile(user, p string, data []byte, appendMode bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if p == "/dev/null" {
-		return nil
-	}
 	if n, cp, err := f.resolve(p, user, true, 0); err == nil {
 		if n.IsDir() {
 			return ErrIsDir
 		}
 		if !canAccess(n, user, 2) {
 			return ErrPermission
+		}
+		if n.IsDevice() {
+			return nil // written to the device, gone
 		}
 		if f.readOnly(cp) {
 			return ErrReadOnly
@@ -553,12 +606,16 @@ func (f *FS) Copy(user, src, dst string, recursive bool) error {
 		if f.readOnly(dp) {
 			return ErrReadOnly
 		}
-		delta := int64(len(n.Data) - len(d.Data))
+		if d.IsDevice() {
+			return nil
+		}
+		data := f.contents(n)
+		delta := int64(len(data) - len(d.Data))
 		if f.bytes+delta > f.MaxBytes {
 			return ErrNoSpace
 		}
 		f.bytes += delta
-		d.Data = append([]byte(nil), n.Data...)
+		d.Data = data
 		d.FakeSize = n.FakeSize
 		d.ModTime = f.Now()
 		return nil
@@ -568,6 +625,10 @@ func (f *FS) Copy(user, src, dst string, recursive bool) error {
 		return err
 	}
 	c := n.clone()
+	if n.IsDevice() || n.Virtual {
+		// cp copies what it reads: a regular file.
+		c = &Node{Mode: n.Mode.Perm() &^ 0o022, Data: f.contents(n)}
+	}
 	c.Name = name
 	c.Owner, c.Group = user, user
 	c.ModTime = f.Now()
@@ -677,4 +738,100 @@ func (f *FS) Put(p string, n *Node) {
 	cn, cb := countTree(n)
 	f.nodes += cn
 	f.bytes += cb
+}
+
+// Delete removes the node at p, if any, with no permission checks.
+func (f *FS) Delete(p string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	parts := split(p)
+	if len(parts) == 0 {
+		return
+	}
+	cur := f.root
+	for _, part := range parts[:len(parts)-1] {
+		next, ok := cur.Children[part]
+		if !ok || !next.IsDir() {
+			return
+		}
+		cur = next
+	}
+	if old, ok := cur.Children[parts[len(parts)-1]]; ok {
+		cn, cb := countTree(old)
+		f.nodes -= cn
+		f.bytes -= cb
+		delete(cur.Children, old.Name)
+	}
+}
+
+// Walk calls fn for every node under root, root included, with no
+// permission checks. fn may change the nodes' metadata.
+func (f *FS) Walk(root string, fn func(p string, n *Node)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n, _, err := f.resolve(root, "root", false, 0)
+	if err != nil {
+		return err
+	}
+	var walk func(p string, n *Node)
+	walk = func(p string, n *Node) {
+		fn(p, n)
+		for name, c := range n.Children {
+			walk(path.Join(p, name), c)
+		}
+	}
+	walk(root, n)
+	return nil
+}
+
+// Used returns how many bytes and nodes the filesystem holds.
+func (f *FS) Used() (bytes int64, nodes int) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.bytes, f.nodes
+}
+
+// Export returns a deep copy of the tree at p, for saving or moving to
+// another filesystem with Put.
+func (f *FS) Export(p string) (*Node, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	n, _, err := f.resolve(p, "root", false, 0)
+	if err != nil {
+		return nil, err
+	}
+	return n.clone(), nil
+}
+
+// programBytes makes up the content of a program: header, then code-like
+// bytes (the same every time for the same program), with its strings in
+// the data section near the end.
+func programBytes(header []byte, size int64, strs []string) []byte {
+	b := make([]byte, size)
+	copy(b, header)
+	h := fnv.New64a()
+	h.Write(header)
+	fmt.Fprint(h, size)
+	x := h.Sum64() | 1
+	for i := int64(len(header)); i < size; i++ {
+		// xorshift: fast and deterministic. A third of a binary is
+		// zeros (padding, tables).
+		x ^= x << 13
+		x ^= x >> 7
+		x ^= x << 17
+		if x%3 == 0 {
+			continue
+		}
+		b[i] = byte(x >> 24)
+	}
+	at := size * 3 / 4
+	for _, s := range strs {
+		if at+int64(len(s))+1 >= size {
+			break
+		}
+		copy(b[at:], s)
+		b[at+int64(len(s))] = 0
+		at += int64(len(s)) + 1
+	}
+	return b
 }

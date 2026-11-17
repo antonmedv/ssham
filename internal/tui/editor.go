@@ -6,8 +6,8 @@ import (
 )
 
 // Editor is the line being typed at the prompt: text, a cursor, and history
-// browsing, with readline-style key bindings. It knows nothing about Bubble
-// Tea, so it is easy to test.
+// browsing, with readline-style key bindings. It knows nothing about the
+// terminal, so it is easy to test.
 type Editor struct {
 	text   []rune
 	cursor int // rune index into text

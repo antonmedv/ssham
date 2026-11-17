@@ -1,5 +1,5 @@
-// Command ssham is an SSH honeypot. It accepts any password or key, presents
-// the BusyBox shell of an IP camera, built with Wish and Bubble Tea, and
+// Command ssham is an SSH honeypot. It accepts common default passwords, presents
+// the BusyBox shell of an IP camera, built with Wish, and
 // records every credential, command, and download attempt as JSON lines. No command is
 // ever executed on the host and no outbound connection is ever made.
 package main
@@ -23,13 +23,14 @@ import (
 func main() {
 	var (
 		addr        = flag.String("addr", ":2222", "address to listen on")
-		hostKey     = flag.String("host-key", ".ssh/ssham_ed25519", "path to the SSH host key (generated if missing)")
+		hostKeyDir  = flag.String("host-key-dir", ".ssh", "directory with the SSH host keys (generated if missing)")
 		hostname    = flag.String("hostname", "ipcam", "hostname of the device")
 		kernel      = flag.String("kernel", "4.9.37", "kernel release shown by uname")
 		version     = flag.String("version", "dropbear_2019.78", "SSH server version banner (without SSH-2.0-)")
 		logPath     = flag.String("log", "-", "file to append JSON audit events to (- for stdout)")
+		statePath   = flag.String("state", "", "file to keep the camera's files and uptime in across restarts (none if empty)")
 		maxSessions = flag.Int("max-sessions", 64, "maximum concurrent sessions")
-		idle        = flag.Duration("idle-timeout", 10*time.Minute, "disconnect sessions idle for this long")
+		idle        = flag.Duration("idle-timeout", 30*time.Minute, "disconnect sessions idle for this long")
 		maxTime     = flag.Duration("max-timeout", time.Hour, "disconnect sessions after this long regardless of activity")
 		debug       = flag.Bool("debug", false, "verbose operational logging")
 	)
@@ -50,11 +51,12 @@ func main() {
 
 	srv, err := server.New(server.Config{
 		Addr:        *addr,
-		HostKeyPath: *hostKey,
+		HostKeyDir:  *hostKeyDir,
 		Hostname:    *hostname,
 		Kernel:      *kernel,
 		Version:     *version,
 		MaxSessions: *maxSessions,
+		StatePath:   *statePath,
 		IdleTimeout: *idle,
 		MaxTimeout:  *maxTime,
 		Audit:       auditLog,

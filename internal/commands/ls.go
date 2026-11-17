@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"hash/fnv"
 	"io/fs"
 	"path"
 	"sort"
@@ -24,14 +25,14 @@ func cmdLs(e *shell.Env) int {
 	long := o.Has("l", "n", "g", "o")
 	all := o.Has("a", "all")
 	almost := o.Has("A", "almost-all")
-	human := o.Has("h", "human-readable")
 	dirOnly := o.Has("d", "directory")
 	one := o.Has("1")
 	recursive := o.Has("R", "recursive")
 	classify := o.Has("F", "classify")
-	color := false
-	if c, ok := o.Value("color"); ok && c != "never" && c != "no" {
-		color = c == "always" || e.Color()
+	// BusyBox colors by default on a terminal; --color alone means always.
+	color := e.IsTTY()
+	if c, ok := o.Value("color"); ok {
+		color = c == "" || c == "always" || c == "yes" || c == "force" || ((c == "auto" || c == "tty" || c == "if-tty") && e.IsTTY())
 	}
 	targets := o.Args
 	if len(targets) == 0 {
@@ -45,9 +46,9 @@ func cmdLs(e *shell.Env) int {
 		case o.Has("S"):
 			sort.SliceStable(ents, func(i, j int) bool { return ents[i].node.Size() > ents[j].node.Size() })
 		default:
-			sort.SliceStable(ents, func(i, j int) bool {
-				return strings.ToLower(strings.TrimLeft(ents[i].name, ".")) < strings.ToLower(strings.TrimLeft(ents[j].name, "."))
-			})
+			// No locale on the device: plain byte order, so TZ sorts
+			// before dropbear.
+			sort.SliceStable(ents, func(i, j int) bool { return ents[i].name < ents[j].name })
 		}
 		if o.Has("r") {
 			for i, j := 0, len(ents)-1; i < j; i, j = i+1, j-1 {
@@ -76,71 +77,25 @@ func cmdLs(e *shell.Env) int {
 
 	printEntries := func(ents []lsEntry, dirPath string, showTotal bool) {
 		if long {
-			var total int64
-			rows := make([][]string, 0, len(ents))
-			for _, ent := range ents {
-				n := ent.node
-				total += (n.Size() + 4095) / 4096 * 4
-				links := 1
-				if n.IsDir() {
-					links = 2
-					for _, c := range n.Children {
-						if c.IsDir() {
-							links++
-						}
-					}
-				}
-				size := strconv.FormatInt(n.Size(), 10)
-				if human {
-					size = humanSize(n.Size())
-				}
-				owner, group := n.Owner, n.Group
-				if o.Has("n") {
-					owner, group = uidOf(e, owner), gidOf(e, group)
-				}
-				name := display(ent)
-				if n.IsLink() {
-					name += " -> " + n.Target
-				}
-				row := []string{modeString(n), strconv.Itoa(links), owner, group, size, lsTime(e.Now(), n.ModTime), name}
-				if o.Has("g") {
-					row = append(row[:2], row[3:]...)
-				} else if o.Has("o") {
-					row = append(row[:3], row[4:]...)
-				}
-				rows = append(rows, row)
-			}
 			if showTotal {
-				if human {
-					e.Printf("total %s\n", humanSize(total*1024))
-				} else {
-					e.Printf("total %d\n", total)
-				}
-			}
-			widths := make([]int, 8)
-			for _, r := range rows {
-				for i, c := range r[:len(r)-1] {
-					widths[i] = max(widths[i], len(c))
-				}
-			}
-			for _, r := range rows {
-				var b strings.Builder
-				for i, c := range r[:len(r)-1] {
-					if i == 1 || i == len(r)-3 { // numbers are right-aligned
-						fmt.Fprintf(&b, "%*s ", widths[i], c)
-					} else if i == len(r)-2 {
-						b.WriteString(c + " ")
-					} else {
-						fmt.Fprintf(&b, "%-*s ", widths[i], c)
+				var total int64
+				for _, ent := range ents {
+					if !ent.node.IsDir() {
+						total += (ent.node.Size() + 1023) / 1024
 					}
 				}
-				b.WriteString(r[len(r)-1])
-				e.Printf("%s\n", b.String())
+				e.Printf("total %d\n", total)
+			}
+			for _, ent := range ents {
+				e.Printf("%s\n", lsLong(e, ent, display(ent), o))
 			}
 			return
 		}
 		if one || !e.IsTTY() {
 			for _, ent := range ents {
+				if o.Has("i") {
+					e.Printf("%7d ", inode(ent.path))
+				}
 				e.Printf("%s\n", display(ent))
 			}
 			return
@@ -152,6 +107,10 @@ func cmdLs(e *shell.Env) int {
 			plain[i] = len(ent.name)
 			if classify && names[i] != "" && strings.ContainsAny(names[i][len(names[i])-1:], "/@*") {
 				plain[i]++
+			}
+			if o.Has("i") {
+				names[i] = fmt.Sprintf("%7d ", inode(ent.path)) + names[i]
+				plain[i] += 8
 			}
 		}
 		e.Print(columns(names, plain, e.Width()))
@@ -177,9 +136,9 @@ func cmdLs(e *shell.Env) int {
 			continue
 		}
 		if n.IsDir() && !dirOnly {
-			dirs = append(dirs, lsEntry{name: t, node: n})
+			dirs = append(dirs, lsEntry{name: t, path: p, node: n})
 		} else {
-			files = append(files, lsEntry{name: t, node: n})
+			files = append(files, lsEntry{name: t, path: p, node: n})
 		}
 	}
 	sortEntries(files)
@@ -201,13 +160,13 @@ func cmdLs(e *shell.Env) int {
 		if all {
 			self, _ := e.FS.AsRoot().Stat(p)
 			parent, _ := e.FS.AsRoot().Stat(path.Dir(p))
-			ents = append(ents, lsEntry{".", self}, lsEntry{"..", parent})
+			ents = append(ents, lsEntry{".", p, self}, lsEntry{"..", path.Dir(p), parent})
 		}
 		for _, c := range children {
 			if strings.HasPrefix(c.Name, ".") && !all && !almost {
 				continue
 			}
-			ents = append(ents, lsEntry{c.Name, c})
+			ents = append(ents, lsEntry{c.Name, path.Join(p, c.Name), c})
 		}
 		sortEntries(ents)
 		printEntries(ents, p, true)
@@ -231,25 +190,108 @@ func cmdLs(e *shell.Env) int {
 
 type lsEntry struct {
 	name string
+	path string
 	node *vfs.Node
 }
 
+// lsLong formats one line of ls -l the way BusyBox does: fixed-width
+// fields, not columns fitted to the content like GNU ls.
+func lsLong(e *shell.Env, ent lsEntry, name string, o shell.Flags) string {
+	n := ent.node
+	var b strings.Builder
+	if o.Has("i") {
+		fmt.Fprintf(&b, "%7d ", inode(ent.path))
+	}
+	links := 1
+	if n.IsDir() {
+		links = 2
+		for _, c := range n.Children {
+			if c.IsDir() {
+				links++
+			}
+		}
+	}
+	fmt.Fprintf(&b, "%-10s %4d ", modeString(n), links)
+	owner, group := n.Owner, n.Group
+	if o.Has("n") {
+		owner, group = uidOf(e, owner), gidOf(e, group)
+	}
+	switch {
+	case o.Has("g"):
+		fmt.Fprintf(&b, "%-8.8s ", group)
+	case o.Has("o"):
+		fmt.Fprintf(&b, "%-8.8s ", owner)
+	default:
+		fmt.Fprintf(&b, "%-8.8s %-8.8s ", owner, group)
+	}
+	switch {
+	case n.IsDevice():
+		fmt.Fprintf(&b, "%4d, %4d ", n.Major, n.Minor)
+	case o.Has("h", "human-readable"):
+		fmt.Fprintf(&b, "%7s ", humanSize(n.Size()))
+	default:
+		fmt.Fprintf(&b, "%9d ", fileSize(ent.path, n))
+	}
+	b.WriteString(lsTime(e.Now().In(zone), n.ModTime.In(zone)) + " " + name)
+	if n.IsLink() {
+		b.WriteString(" -> " + n.Target)
+	}
+	return b.String()
+}
+
+// fileSize is the size ls shows. A directory's size depends on the
+// filesystem: tmpfs counts 20 per entry, squashfs the names, /proc and
+// jffs2 nothing.
+func fileSize(p string, n *vfs.Node) int64 {
+	if !n.IsDir() {
+		return n.Size()
+	}
+	switch {
+	case n.Virtual, p == "/mnt/mtd" || strings.HasPrefix(p, "/mnt/mtd/"):
+		return 0
+	case p == "/tmp" || p == "/var" || p == "/dev" || strings.HasPrefix(p, "/tmp/") || strings.HasPrefix(p, "/var/") || strings.HasPrefix(p, "/dev/"):
+		return 40 + 20*int64(len(n.Children))
+	}
+	size := int64(3)
+	for name := range n.Children {
+		size += 8 + int64(len(name))
+	}
+	return size
+}
+
+// inode makes up a stable inode number for p: small on the squashfs root,
+// larger on the RAM filesystems.
+func inode(p string) uint64 {
+	h := fnv.New32a()
+	h.Write([]byte(p))
+	v := uint64(h.Sum32())
+	switch {
+	case p == "/":
+		return 1
+	case strings.HasPrefix(p, "/proc/"):
+		return 4026531840 + v%100000
+	case strings.HasPrefix(p, "/tmp/"), strings.HasPrefix(p, "/var/"), strings.HasPrefix(p, "/dev/"):
+		return 1000 + v%9000
+	case strings.HasPrefix(p, "/mnt/mtd"):
+		return 2 + v%300
+	}
+	return 2 + v%1400
+}
+
+// lsColor colors name the way BusyBox ls does: "\x1b[BOLD;COLORm".
 func lsColor(n *vfs.Node, name string) string {
+	attr, color := 0, 0
 	switch {
 	case n.IsLink():
-		return "\x1b[01;36m" + name + "\x1b[0m"
-	case n.IsDir() && n.Mode&0o1000 != 0 && n.Mode&0o002 != 0:
-		return "\x1b[30;42m" + name + "\x1b[0m"
+		attr, color = 1, 36
 	case n.IsDir():
-		return "\x1b[01;34m" + name + "\x1b[0m"
-	case n.Mode&0o4000 != 0:
-		return "\x1b[37;41m" + name + "\x1b[0m"
+		attr, color = 1, 34
+	case n.IsDevice():
+		attr, color = 1, 35
 	case n.Mode.Perm()&0o111 != 0:
-		return "\x1b[01;32m" + name + "\x1b[0m"
-	case strings.HasSuffix(name, ".gz") || strings.HasSuffix(name, ".tar") || strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tgz"):
-		return "\x1b[01;31m" + name + "\x1b[0m"
+		attr, color = 1, 32
 	}
-	return name
+	return fmt.Sprintf("\x1b[%d;%dm%s\x1b[0m", attr, color, name)
 }
 
 // modeString renders permissions the way ls -l does.
@@ -260,6 +302,10 @@ func modeString(n *vfs.Node) string {
 		b[0] = 'd'
 	case n.IsLink():
 		b[0] = 'l'
+	case n.IsDevice() && n.Mode&fs.ModeCharDevice != 0:
+		b[0] = 'c'
+	case n.IsDevice():
+		b[0] = 'b'
 	}
 	m := n.Mode
 	rwx := "rwxrwxrwx"
@@ -286,7 +332,7 @@ func modeString(n *vfs.Node) string {
 }
 
 func lsTime(now, t time.Time) string {
-	if now.Sub(t) > 180*24*time.Hour || t.Sub(now) > time.Hour {
+	if now.Sub(t) >= 365*24*time.Hour/2 || t.Sub(now) >= 15*time.Minute {
 		return t.Format("Jan _2  2006")
 	}
 	return t.Format("Jan _2 15:04")
@@ -309,42 +355,32 @@ func humanSize(n int64) string {
 	return fmt.Sprintf("%.0f%c", f+0.5, units[i])
 }
 
-// columns lays names out in vertical columns like GNU ls.
+// columns lays names out like BusyBox ls: down the columns, every column
+// as wide as the longest name plus two.
 func columns(names []string, widths []int, termWidth int) string {
 	if len(names) == 0 {
 		return ""
 	}
-	for cols := len(names); cols >= 1; cols-- {
-		rows := (len(names) + cols - 1) / cols
-		cols := (len(names) + rows - 1) / rows
-		colW := make([]int, cols)
-		for i, w := range widths {
-			c := i / rows
-			colW[c] = max(colW[c], w+2)
-		}
-		total := 0
-		for _, w := range colW {
-			total += w
-		}
-		if total-2 > termWidth && cols > 1 {
-			continue
-		}
-		var b strings.Builder
-		for r := 0; r < rows; r++ {
-			for c := 0; c < cols; c++ {
-				i := c*rows + r
-				if i >= len(names) {
-					break
-				}
-				b.WriteString(names[i])
-				last := c == cols-1 || (c+1)*rows+r >= len(names)
-				if !last {
-					b.WriteString(strings.Repeat(" ", colW[c]-widths[i]))
-				}
-			}
-			b.WriteByte('\n')
-		}
-		return b.String()
+	colW := 0
+	for _, w := range widths {
+		colW = max(colW, w)
 	}
-	return ""
+	colW += 2
+	cols := max(termWidth/colW, 1)
+	rows := (len(names) + cols - 1) / cols
+	var b strings.Builder
+	for r := 0; r < rows; r++ {
+		pad := 0
+		for c := 0; c < cols; c++ {
+			i := c*rows + r
+			if i >= len(names) {
+				break
+			}
+			b.WriteString(strings.Repeat(" ", pad))
+			b.WriteString(names[i])
+			pad = colW - widths[i]
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

@@ -108,10 +108,28 @@ func builtinSet(e *Env) int {
 		return 0
 	}
 	args := e.Args[1:]
-	if args[0] == "--" {
+	for len(args) > 0 && len(args[0]) > 1 && (args[0][0] == '-' || args[0][0] == '+') && args[0] != "--" {
+		on := args[0][0] == '-'
+		if args[0][1:] == "o" || args[0][1:] == "-o" {
+			if len(args) > 1 {
+				args = args[1:] // set -o name: accepted, ignored
+			}
+		} else {
+			for _, f := range args[0][1:] {
+				if !strings.ContainsRune("efuvxnaCbm", f) {
+					sh(e, "set: illegal option -%c", f)
+					return 2
+				}
+				e.sh.opts[byte(f)] = on
+			}
+		}
 		args = args[1:]
-	} else if strings.HasPrefix(args[0], "-") || strings.HasPrefix(args[0], "+") {
-		return 0
+		if len(args) == 0 {
+			return 0
+		}
+	}
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
 	}
 	argv0 := "-sh"
 	if len(e.sh.args) > 0 {
@@ -150,10 +168,10 @@ func builtinLet(e *Env) int {
 		name, rhs, assign := strings.Cut(expr, "=")
 		var err error
 		if assign && isName(name) && !strings.HasPrefix(rhs, "=") {
-			v, err = arith(rhs, e.sh.getVar)
+			v, err = arith(rhs, e.sh.getVar, e.sh.setVar)
 			e.sh.setVar(name, strconv.FormatInt(v, 10))
 		} else {
-			v, err = arith(expr, e.sh.getVar)
+			v, err = arith(expr, e.sh.getVar, e.sh.setVar)
 		}
 		if err != nil {
 			sh(e, "let: %s", err)
@@ -168,11 +186,6 @@ func builtinLet(e *Env) int {
 
 // builtinLocal fails: functions are not supported, and ash only allows
 // local inside one.
-func builtinLocal(e *Env) int {
-	sh(e, "local: not in a function")
-	return 2
-}
-
 func builtinRead(e *Env) int {
 	o := e.Flags("p", "t", "n", "d", "u")
 	prompt, _ := o.Value("p")

@@ -104,6 +104,7 @@ func Install(f *vfs.FS, r *Registry) {
 	}
 	bb := rootfs.Binary(busyboxSize)
 	bb.ModTime = mtime
+	bb.Strings = append([]string{rootfs.BusyBox + " multi-call binary.", "BusyBox is copyrighted by many authors between 1998-2015."}, sortedNames(r.Applets())...)
 	f.Put(busyboxPath, bb)
 	for name, dir := range r.Applets() {
 		if name == "busybox" {
@@ -122,4 +123,13 @@ func linkTarget(dir string) string {
 	}
 	depth := strings.Count(strings.Trim(dir, "/"), "/") + 1
 	return strings.Repeat("../", depth) + strings.TrimPrefix(busyboxPath, "/")
+}
+
+func sortedNames(m map[string]string) []string {
+	names := make([]string, 0, len(m))
+	for n := range m {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }

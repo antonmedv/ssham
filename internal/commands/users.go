@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/antonmedv/ssham/internal/audit"
+	"github.com/antonmedv/ssham/internal/crypt"
+	"github.com/antonmedv/ssham/internal/rootfs"
 	"github.com/antonmedv/ssham/internal/shell"
 )
 
@@ -56,31 +58,14 @@ func cmdId(e *shell.Env) int {
 	return 0
 }
 
-// setPassword replaces user's hash in /etc/shadow (a link to flash, so it
-// is writable). The hash only looks like md5-crypt; it is never checked.
-func setPassword(e *shell.Env, user string) error {
-	data, err := e.FS.AsRoot().ReadFile("/etc/shadow")
-	if err != nil {
-		return err
+// setPassword stores the md5-crypt hash of password in /etc/shadow, so
+// cracking it gives back what the attacker typed.
+func setPassword(e *shell.Env, user, password string) error {
+	salt := make([]byte, 8)
+	for i := range salt {
+		salt[i] = crypt.SaltChars[e.Rand().IntN(len(crypt.SaltChars))]
 	}
-	const chars = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-	random := func(n int) string {
-		b := make([]byte, n)
-		for i := range b {
-			b[i] = chars[e.Rand().IntN(len(chars))]
-		}
-		return string(b)
-	}
-	days := strconv.FormatInt(e.Now().Unix()/86400, 10)
-	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
-	for i, l := range lines {
-		f := strings.Split(l, ":")
-		if len(f) > 2 && f[0] == user {
-			f[1], f[2] = "$1$"+random(8)+"$"+random(22), days
-			lines[i] = strings.Join(f, ":")
-		}
-	}
-	return e.FS.AsRoot().WriteFile("/etc/shadow", []byte(strings.Join(lines, "\n")+"\n"))
+	return rootfs.SetPassword(e.FS.AsRoot().FS(), user, crypt.MD5(password, string(salt)), e.Now())
 }
 
 func cmdChpasswd(e *shell.Env) int {
@@ -99,7 +84,7 @@ func cmdChpasswd(e *shell.Env) int {
 			e.Errorf("unknown user %s", user)
 			return 1
 		}
-		if err := setPassword(e, user); err != nil {
+		if err := setPassword(e, user, pw); err != nil {
 			e.Errorf("can't open '/etc/shadow': %s", err)
 			return 1
 		}
@@ -132,7 +117,7 @@ func cmdPasswd(e *shell.Env) int {
 		e.Errorf("password for %s is unchanged", target)
 		return 1
 	}
-	if err := setPassword(e, target); err != nil {
+	if err := setPassword(e, target, pw1); err != nil {
 		e.Errorf("can't open '/etc/shadow': %s", err)
 		return 1
 	}

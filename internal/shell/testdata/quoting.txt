@@ -8,6 +8,7 @@ double "quoted" $HOME single \n
 $ echo a\ b\\c
 a b\c
 $ echo 'unterminated
+> 
 sh: syntax error: unterminated quoted string
 [exit 2]
 $ X=5; echo "x=$X" ${X} ${Y:-default} ${#HOME}
@@ -56,6 +57,7 @@ $ echo '/etc/pass*'
 
 // Not ash: these are bash features, and fail the way ash fails on them.
 $ echo $RANDOM $BASH_VERSION $UID
+136
 
 $ a=(1 2 3)
 sh: syntax error: unexpected "("
@@ -67,17 +69,31 @@ $ echo ${!HOME}
 sh: syntax error: bad substitution
 [exit 2]
 $ echo ${HOME/root/x}
-sh: syntax error: bad substitution
-[exit 2]
+/x
 $ f() { echo hi; }
-sh: syntax error: unexpected "("
-[exit 2]
 $ function f { echo hi; }
-sh: syntax error: unexpected "}"
-[exit 2]
 $ cat <(echo hi)
 sh: syntax error: unexpected "("
 [exit 2]
 $ [[ 1 == 1 ]] && echo yes
-sh: [[: not found
-[exit 127]
+yes
+
+// ash's bash extensions and arithmetic.
+$ x=abcdef; echo ${x:1:3} ${x:4} ${x: -2} ${x/cd/-} ${x//[ace]/.} ${x/#ab/AB} ${x/%ef/EF}
+bcd ef ef ab-ef .b.d.f ABcdef abcdEF
+$ echo $'a\tb\x41' $'it\'s'
+a	bA it's
+$ echo $((1<<4 | 1)) $((2**10)) $((7>3 ? 1 : 0)) $((~0 & 255)); i=1; : $((i+=4)); echo $i $((i++)) $i
+17 1024 1 255
+5 5 6
+$ set -- a 'b c'; for a in "$@"; do echo "[$a]"; done; set --; for a in "$@"; do echo none; done; echo end
+[a]
+[b c]
+end
+$ x=$(false); echo $?; y=$(true); echo $?
+1
+0
+$ echo ${#RANDOM} | grep -c '^[1-5]$'
+1
+$ echo "$PS1|$PS2|$PS4|$OPTIND"
+\w \$ |> |+ |1

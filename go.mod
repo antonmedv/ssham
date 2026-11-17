@@ -3,7 +3,6 @@ module github.com/antonmedv/ssham
 go 1.27.1
 
 require (
-	charm.land/bubbletea/v2 v2.1.1
 	charm.land/ssh v0.4.3
 	charm.land/wish/v2 v2.0.5
 	github.com/charmbracelet/x/ansi v0.11.9
@@ -12,6 +11,7 @@ require (
 )
 
 require (
+	charm.land/bubbletea/v2 v2.1.1 // indirect
 	charm.land/lipgloss/v2 v2.1.1 // indirect
 	charm.land/log/v2 v2.0.1 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect

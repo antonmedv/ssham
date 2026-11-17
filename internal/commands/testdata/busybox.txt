@@ -15,23 +15,24 @@ Usage: busybox [function [arguments]...]
 	will act like whatever it was invoked as.
 
 Currently defined functions:
-	[, ash, awk, basename, cat, chmod, chown, chpasswd, clear, cp, cut,
-	date, dd, df, dirname, dmesg, echo, egrep, env, false, fgrep, find,
-	free, grep, gunzip, gzip, halt, head, hostname, id, ifconfig, kill,
-	killall, ln, ls, md5sum, mkdir, more, mount, mv, netstat, passwd,
-	ping, poweroff, printf, ps, pwd, reboot, rm, rmdir, route, sed, sh,
-	sleep, sort, sync, tail, tar, tee, test, tftp, top, touch, tr, true,
+	[, [[, ash, awk, basename, cat, chmod, chown, chpasswd, clear, cp,
+	cut, date, dd, df, dirname, dmesg, echo, egrep, env, false, fgrep,
+	find, free, getty, grep, gunzip, gzip, halt, head, hostname, id,
+	ifconfig, init, kill, killall, ln, logread, ls, md5sum, mkdir, more,
+	mount, mv, netstat, passwd, ping, poweroff, printf, ps, pwd,
+	readlink, reboot, rm, rmdir, route, sed, sh, sleep, sort, sync,
+	syslogd, tail, tar, tee, test, tftp, top, touch, tr, true, umount,
 	uname, uniq, uptime, wc, wget, which, whoami, xargs
 $ busybox --list | head -5
 [
+[[
 ash
 awk
 basename
-cat
 $ busybox --list-full | grep -c /
-73
+80
 $ busybox ls /mnt
-mtd
+^[[1;34mmtd^[[0m
 $ busybox MIRAI
 MIRAI: applet not found
 [exit 127]

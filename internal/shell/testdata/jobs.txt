@@ -1,0 +1,66 @@
+// Background jobs run at once, with their sleeps fast-forwarded: they
+// stay Running for as long as they would take.
+$ sleep 30 & echo "started $!"
+[1] 8180
+started 8180
+$ jobs
+[1]+  Running                    sleep 30
+$ ps | grep -c 'sleep 30'
+2
+$ wait; echo waited $?; jobs
+waited 0
+$ (echo from bg; sleep 1) & sleep 2
+[1] 8189
+from bg
+$ echo next
+next
+$ sleep 100 & kill %1; jobs; kill %1
+[2] 8194
+[1]   Terminated                 (...)
+[2]+  Running                    sleep 100
+sh: %1: no such job
+[exit 1]
+$ kill -9 126; ps | grep -c ipcam; kill 999
+1
+sh: can't kill pid 999: No such process
+[exit 1]
+$ x=1; f() { x=2; }; f & wait; echo $x
+[1] 8209
+1
+
+// trap, set -e, set -x, getopts, [[.
+$ sh -c 'trap "echo bye" EXIT; echo hi'
+hi
+bye
+$ trap 'echo t' INT; trap; trap - INT; trap
+trap -- 'echo t' INT
+$ sh -c 'set -e; false; echo not reached'; echo $?
+1
+$ sh -c 'set -e; false || true; if false; then :; fi; echo survived'
+survived
+$ set -x; echo traced; set +x; echo $-
++ echo traced
+traced
++ set +x
+smi
+$ set -- -a -b val file; while getopts ab: o; do echo "$o ${OPTARG:-}"; done; shift $((OPTIND-1)); echo "rest: $*"
+a 
+b val
+rest: file
+$ [[ abc == a* ]] && echo match; [[ -n x && 1 -lt 2 ]] && echo and; [ a -eq 1 ]
+match
+sh: missing ]]
+sh: a: bad number
+[exit 2]
+$ [ -c /dev/null -a ! -f /dev/null ] && echo chardev; [ \( 1 = 1 \) -o x = y ] && echo paren
+chardev
+paren
+
+// Signals to the shell honour trap.
+$ trap 'echo got USR1' USR1; kill -USR1 $$; echo after
+got USR1
+after
+$ trap '' HUP; kill -HUP $$; echo still here
+still here
+$ kill -TERM $$; echo interactive ash ignores TERM
+interactive ash ignores TERM

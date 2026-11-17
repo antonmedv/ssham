@@ -54,7 +54,7 @@ dir
 file
 small
 $ [ 1 -lt 2
-sh: [: missing ]
+sh: missing ]
 [exit 2]
 $ set -- a b c; echo $# $2; shift; echo $1
 3 b
@@ -74,10 +74,10 @@ $ ulimit -n; umask
 $ help
 Built-in commands:
 ------------------
-	. : [ alias break cd chdir command continue echo eval exec exit
-	export false hash help history jobs kill let local printf pwd
-	read readonly return set shift source test times trap true type
-	ulimit umask unalias unset wait
+	. : [ [[ alias bg break cd chdir command continue echo eval exec
+	exit export false fg getopts hash help history jobs kill let
+	local printf pwd read readonly return set shift source test times
+	trap true type ulimit umask unalias unset wait
 $ exit abc
 sh: exit: Illegal number: abc
 [exit 2]

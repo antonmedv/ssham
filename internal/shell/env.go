@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -25,16 +26,25 @@ type Env struct {
 	// FS is the filesystem as the current user sees it, with relative
 	// paths resolved against the working directory.
 	FS *vfs.View
+	// PID is the command's process id.
+	PID int
 
-	sh *Shell
-	io stdio
+	sh      *Shell
+	endless bool // it read from a device that never ends
+	io      stdio
 }
 
 func (s *Shell) env(ctx context.Context, args []string, io stdio) *Env {
-	return &Env{
-		Ctx: ctx, Args: args, Stdin: io.in, Stdout: io.out, Stderr: io.err,
-		FS: s.view(), sh: s, io: io,
+	pid := s.execPID
+	if pid == 0 {
+		pid = s.pid // a builtin runs in the shell itself
 	}
+	e := &Env{
+		Ctx: ctx, Args: args, Stdin: io.in, Stdout: io.out, Stderr: io.err,
+		FS: s.view(), PID: pid, sh: s, io: io,
+	}
+	e.FS.Endless = e.readEndless
+	return e
 }
 
 // ---- Output ----
@@ -88,6 +98,9 @@ func (e *Env) Flags(valued ...string) Flags { return ParseFlags(e.Args[1:], valu
 
 // ReadStdin reads all of stdin, up to the capture limit.
 func (e *Env) ReadStdin() string {
+	if _, ok := e.Stdin.(*endlessReader); ok {
+		e.readEndless()
+	}
 	b, _ := io.ReadAll(io.LimitReader(e.Stdin, maxCaptureBytes))
 	return string(b)
 }
@@ -163,21 +176,25 @@ func (e *Env) Host() rootfs.Host { return e.sh.cfg.Host }
 
 // Session describes the attacker's connection.
 type Session struct {
-	LoginUser string // the user they logged in as
-	ClientIP  string
-	Started   time.Time
-	PID       int    // the login shell's pid ($$)
-	Term      string // $TERM, empty without a pty
+	LoginUser  string // the user they logged in as
+	ClientIP   string
+	ClientPort int
+	Started    time.Time
+	PID        int    // the login shell's pid ($$)
+	Term       string // $TERM, empty without a pty
 }
 
 // Session returns information about the connection.
 func (e *Env) Session() Session {
 	c := e.sh.cfg
-	return Session{LoginUser: c.User, ClientIP: c.ClientIP, Started: c.Started, PID: e.sh.pid, Term: c.Term}
+	return Session{LoginUser: c.User, ClientIP: c.ClientIP, ClientPort: c.ClientPort, Started: c.Started, PID: e.sh.loginPID, Term: c.Term}
 }
 
 // NewPID allocates a process id for things like ps showing itself.
 func (e *Env) NewPID() int { return e.sh.allocPID() }
+
+// SyncProc brings /proc up to date, for commands that read it.
+func (e *Env) SyncProc() { e.sh.syncProc(e.PID) }
 
 // Getenv returns a shell variable.
 func (e *Env) Getenv(name string) string { return e.sh.getVar(name) }
@@ -202,7 +219,7 @@ func (e *Env) Now() time.Time { return e.sh.now() }
 func (e *Env) Rand() *rand.Rand { return e.sh.cfg.Rand }
 
 // Sleep waits for d. It returns false if the command was interrupted.
-func (e *Env) Sleep(d time.Duration) bool { return e.sh.cfg.Sleep(e.Ctx, d) }
+func (e *Env) Sleep(d time.Duration) bool { return e.sh.sleep(e.Ctx, d) }
 
 // ---- Running other commands ----
 
@@ -226,10 +243,10 @@ func (e *Env) RunScript(src string, args ...string) int {
 	if len(args) == 0 {
 		args = nil
 	}
-	status, ok := e.sh.nest(true, args, func() int { return e.sh.execString(e.Ctx, src, e.io) })
-	if !ok {
-		fmt.Fprintf(e.Stderr, "%s: maximum nesting level exceeded\n", e.Args[0])
-	}
+	saved := e.sh.pid
+	e.sh.pid = e.PID // the child shell is this process: $$ is its pid
+	defer func() { e.sh.pid = saved }()
+	status, _ := e.sh.nest(true, args, func() int { return e.sh.execString(e.Ctx, src, e.io) })
 	return status
 }
 
@@ -252,7 +269,34 @@ func (e *Env) RunFile(path string, args ...string) int {
 func (e *Env) Login(user User, cwd string) { e.sh.login(user, cwd) }
 
 // Exit ends the session, as reboot does.
+// Reboot reboots the camera: the session, and every other, is cut.
+func (e *Env) Reboot() {
+	if e.sh.cfg.Reboot != nil {
+		e.sh.cfg.Reboot()
+	}
+}
+
 func (e *Env) Exit(code int) {
 	e.sh.exited = true
 	e.sh.exitCode = code
+}
+
+// errEndless aborts a command that would read an endless stream forever.
+var errEndless = errors.New("endless read")
+
+// readEndless is called when the command reads from a device that never
+// ends, like /dev/urandom. head stops early, and a filter writing into a
+// pipe passes the stream on; anything else would read forever, so the
+// command hangs right there until interrupted, and prints nothing.
+func (e *Env) readEndless() {
+	e.endless = true
+	name := path.Base(e.Args[0])
+	if prefixReaders[name] {
+		return
+	}
+	if _, pipe := e.Stdout.(*limitedBuffer); pipe && streamFilters[name] {
+		return
+	}
+	e.sh.sleep(e.Ctx, 24*time.Hour)
+	panic(errEndless)
 }

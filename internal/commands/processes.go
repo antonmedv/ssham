@@ -2,7 +2,7 @@ package commands
 
 import (
 	"fmt"
-	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,34 +21,77 @@ func init() {
 
 type proc struct {
 	pid, ppid int
-	vsz       int // KB
+	vsz       int // kB
 	stat      string
 	cmd       string
+	comm      string
 }
 
-// processes is what runs on the camera, plus the attacker's session.
+// processes reads the process list from /proc, as BusyBox ps does.
 func processes(e *shell.Env) []proc {
-	pid := e.Session().PID
-	return []proc{
-		{1, 0, 1240, "S", "init"},
-		{2, 0, 0, "SW", "[kthreadd]"},
-		{3, 2, 0, "IW<", "[rcu_gp]"},
-		{6, 2, 0, "SW", "[ksoftirqd/0]"},
-		{7, 2, 0, "IW", "[rcu_preempt]"},
-		{38, 2, 0, "SW", "[kswapd0]"},
-		{214, 2, 0, "SW", "[jffs2_gcd_mtd4]"},
-		{561, 1, 1236, "S", "/sbin/syslogd -C64"},
-		{612, 1, 38472, "S", "./ipcam"},
-		{731, 1, 1052, "S", "/usr/sbin/dropbear -R -p 22"},
-		{pid - 1, 731, 1088, "S", "/usr/sbin/dropbear -R -p 22"},
-		{pid, pid - 1, 1244, "S", "-sh"},
+	e.SyncProc()
+	root := e.FS.AsRoot()
+	entries, _ := root.ReadDir("/proc")
+	var out []proc
+	for _, ent := range entries {
+		pid, err := strconv.Atoi(ent.Name)
+		if err != nil {
+			continue
+		}
+		dir := "/proc/" + ent.Name + "/"
+		stat, _ := root.ReadFile(dir + "stat")
+		// pid (comm) S ppid ...
+		open, close := strings.IndexByte(string(stat), '('), strings.LastIndexByte(string(stat), ')')
+		if open < 0 || close < open {
+			continue
+		}
+		p := proc{pid: pid, comm: string(stat[open+1 : close])}
+		f := strings.Fields(string(stat[close+1:]))
+		if len(f) < 21 {
+			continue
+		}
+		p.stat = f[0]
+		p.ppid, _ = strconv.Atoi(f[1])
+		vsize, _ := strconv.Atoi(f[20])
+		p.vsz = vsize / 1024
+		if p.vsz == 0 {
+			p.stat += "W"
+		}
+		if nice, _ := strconv.Atoi(f[16]); nice < 0 {
+			p.stat += "<"
+		}
+		cmdline, _ := root.ReadFile(dir + "cmdline")
+		p.cmd = strings.TrimSpace(strings.ReplaceAll(string(cmdline), "\x00", " "))
+		if p.cmd == "" {
+			p.cmd = "[" + p.comm + "]"
+		}
+		out = append(out, p)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].pid < out[j].pid })
+	return out
+}
+
+// meminfo reads /proc/meminfo, in kB.
+func meminfo(e *shell.Env) map[string]int64 {
+	data, _ := e.FS.AsRoot().ReadFile("/proc/meminfo")
+	m := map[string]int64{}
+	for _, l := range splitLines(string(data)) {
+		k, v, ok := strings.Cut(l, ":")
+		if ok {
+			m[k], _ = strconv.ParseInt(strings.TrimSuffix(strings.TrimSpace(v), " kB"), 10, 64)
+		}
+	}
+	return m
+}
+
+func loadavg(e *shell.Env) string {
+	data, _ := e.FS.AsRoot().ReadFile("/proc/loadavg")
+	return strings.TrimSpace(string(data))
 }
 
 func cmdPs(e *shell.Env) int {
-	self := proc{e.NewPID(), e.Session().PID, 1240, "R", strings.Join(e.Args, " ")}
 	e.Print("  PID USER       VSZ STAT COMMAND\n")
-	for _, p := range append(processes(e), self) {
+	for _, p := range processes(e) {
 		e.Printf("%5d root     %5d %-4s %s\n", p.pid, p.vsz, p.stat, p.cmd)
 	}
 	return 0
@@ -64,16 +107,19 @@ func cmdTop(e *shell.Env) int {
 		if i > 0 && !e.Sleep(5*time.Second) {
 			return 0
 		}
-		e.Print("Mem: 34048K used, 25012K free, 0K shrd, 1876K buff, 17536K cached\n")
+		procs := processes(e)
+		m := meminfo(e)
+		e.Printf("Mem: %dK used, %dK free, %dK shrd, %dK buff, %dK cached\n",
+			m["MemTotal"]-m["MemFree"], m["MemFree"], m["Shmem"], m["Buffers"], m["Cached"])
 		e.Print("CPU:   2% usr   3% sys   0% nic  94% idle   0% io   0% irq   0% sirq\n")
-		e.Print("Load average: 0.52 0.48 0.47 2/63 742\n")
+		e.Printf("Load average: %s\n", loadavg(e))
 		e.Print("  PID  PPID USER     STAT   VSZ %VSZ %CPU COMMAND\n")
-		for _, p := range processes(e) {
+		for _, p := range procs {
 			cpu := 0
-			if p.pid == 612 {
+			if p.comm == "ipcam" {
 				cpu = 4
 			}
-			e.Printf("%5d %5d root     %-4s %5d %3d%% %3d%% %s\n", p.pid, p.ppid, p.stat, p.vsz, p.vsz*100/59060, cpu, p.cmd)
+			e.Printf("%5d %5d root     %-4s %5d %3d%% %3d%% %s\n", p.pid, p.ppid, p.stat, p.vsz, int64(p.vsz)*100/m["MemTotal"], cpu, p.cmd)
 		}
 		if count == 0 && !e.IsTTY() {
 			count = 1 // top in a pipe runs once, like top -b -n 1
@@ -101,27 +147,51 @@ func cmdKill(e *shell.Env) int {
 		}
 		return 0
 	}
+	sig := 15
+	if strings.HasPrefix(args[0], "-") && len(args[0]) > 1 {
+		name := args[0][1:]
+		if name == "s" && len(args) > 1 {
+			args, name = args[1:], args[1][0:]
+		}
+		n, ok := signalNumber(name)
+		if !ok {
+			fmt.Fprintf(e.Stderr, "%sinvalid signal: %s\n", prefix, name)
+			return 1
+		}
+		sig = n
+		args = args[1:]
+	}
 	status := 0
 	for _, a := range args {
-		if strings.HasPrefix(a, "-") {
-			continue
-		}
-		pid, err := strconv.Atoi(a)
-		if err != nil {
+		if _, err := strconv.Atoi(a); err != nil && !strings.HasPrefix(a, "%") {
 			fmt.Fprintf(e.Stderr, "%sillegal number: %s\n", prefix, a)
 			status = 1
 			continue
 		}
-		found := false
-		for _, p := range processes(e) {
-			found = found || p.pid == pid
-		}
-		if !found {
-			fmt.Fprintf(e.Stderr, "%scan't kill pid %d: No such process\n", prefix, pid)
+		if !e.Kill(a, sig) {
+			if strings.HasPrefix(a, "%") {
+				fmt.Fprintf(e.Stderr, "%s%s: no such job\n", prefix, a)
+			} else {
+				fmt.Fprintf(e.Stderr, "%scan't kill pid %s: No such process\n", prefix, a)
+			}
 			status = 1
 		}
 	}
 	return status
+}
+
+// signalNumber reads a signal given as 9, KILL or SIGKILL.
+func signalNumber(s string) (int, bool) {
+	if n, err := strconv.Atoi(s); err == nil {
+		return n, n >= 0 && n <= len(signals)
+	}
+	s = strings.TrimPrefix(strings.ToUpper(s), "SIG")
+	for i, name := range signals {
+		if name == s {
+			return i + 1, true
+		}
+	}
+	return 0, false
 }
 
 func cmdKillall(e *shell.Env) int {
@@ -133,8 +203,10 @@ func cmdKillall(e *shell.Env) int {
 	for _, name := range o.Args {
 		found := false
 		for _, p := range processes(e) {
-			fields := strings.Fields(p.cmd)
-			found = found || path.Base(fields[0]) == name
+			if p.comm == name && p.pid != e.PID {
+				found = true
+				e.Kill(strconv.Itoa(p.pid), 15)
+			}
 		}
 		if !found {
 			if !o.Has("q") {

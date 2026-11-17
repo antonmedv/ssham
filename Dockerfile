@@ -11,4 +11,4 @@ COPY --from=build /ssham /ssham
 COPY --from=build --chown=nonroot:nonroot /data /data
 USER nonroot
 EXPOSE 2222
-ENTRYPOINT ["/ssham", "-addr", ":2222", "-host-key", "/data/host_key", "-log", "/data/ssham.jsonl"]
+ENTRYPOINT ["/ssham", "-addr", ":2222", "-host-key-dir", "/data", "-state", "/data/state.gob", "-log", "/data/ssham.jsonl"]

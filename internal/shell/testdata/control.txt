@@ -22,7 +22,7 @@ $ { echo a; echo b; } | sort -r
 b
 a
 $ sleep 1 &
-[1] 25088
+[1] 8195
 
 // if, while, until, for.
 $ if [ -d /tmp ]; then echo dir; elif true; then echo no; else echo no; fi
@@ -60,9 +60,11 @@ $ echo (
 sh: syntax error: unexpected "("
 [exit 2]
 $ echo ok &&
+> 
 sh: syntax error: unexpected end of file
 [exit 2]
 $ if true; then echo
+> 
 sh: syntax error: unexpected end of file (expecting "fi")
 [exit 2]
 $ for x in a b; echo $x; done

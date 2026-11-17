@@ -3,6 +3,7 @@ package shell
 import (
 	"fmt"
 	"io/fs"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -221,21 +222,31 @@ func Sprintf(format string, args []string) (string, int) {
 // builtinTest implements the common forms of test / [.
 func builtinTest(e *Env) int {
 	args := e.Args[1:]
-	if e.Args[0] == "[" {
+	switch e.Args[0] {
+	case "[":
 		if len(args) == 0 || args[len(args)-1] != "]" {
-			sh(e, "[: missing ]")
+			sh(e, "missing ]")
+			return 2
+		}
+		args = args[:len(args)-1]
+	case "[[":
+		if len(args) == 0 || args[len(args)-1] != "]]" {
+			sh(e, "missing ]]")
 			return 2
 		}
 		args = args[:len(args)-1]
 	}
-	neg := false
-	for len(args) > 0 && args[0] == "!" {
-		neg = !neg
-		args = args[1:]
+	t := &tester{sh: e.sh, args: args, bash: e.Args[0] == "[["}
+	if len(args) == 0 {
+		return 1
 	}
-	r := evalTest(e.sh, args)
-	if neg {
-		r = !r
+	r := t.or()
+	if t.err == "" && t.pos < len(args) {
+		t.err = args[t.pos] + ": unexpected operator"
+	}
+	if t.err != "" {
+		sh(e, "%s", t.err)
+		return 2
 	}
 	if r {
 		return 0
@@ -243,66 +254,195 @@ func builtinTest(e *Env) int {
 	return 1
 }
 
-func evalTest(s *Shell, a []string) bool {
-	switch len(a) {
-	case 0:
+// tester evaluates test expressions: ! -a -o ( ), and the unary and
+// binary primaries. In [[ ]], == and != match patterns and && || work.
+type tester struct {
+	sh   *Shell
+	args []string
+	pos  int
+	bash bool
+	err  string
+}
+
+func (t *tester) peek(n int) (string, bool) {
+	if t.pos+n < len(t.args) {
+		return t.args[t.pos+n], true
+	}
+	return "", false
+}
+
+func (t *tester) or() bool {
+	r := t.and()
+	for {
+		op, _ := t.peek(0)
+		if op != "-o" && !(t.bash && op == "||") {
+			return r
+		}
+		t.pos++
+		r = t.and() || r
+	}
+}
+
+func (t *tester) and() bool {
+	r := t.not()
+	for {
+		op, _ := t.peek(0)
+		if op != "-a" && !(t.bash && op == "&&") {
+			return r
+		}
+		t.pos++
+		r = t.not() && r
+	}
+}
+
+func (t *tester) not() bool {
+	if a, ok := t.peek(0); ok && a == "!" {
+		if _, more := t.peek(1); more {
+			t.pos++
+			return !t.not()
+		}
+	}
+	return t.primary()
+}
+
+var testBinary = map[string]bool{
+	"=": true, "==": true, "!=": true, "<": true, ">": true,
+	"-eq": true, "-ne": true, "-lt": true, "-le": true, "-gt": true, "-ge": true,
+	"-nt": true, "-ot": true, "-ef": true, "=~": true,
+}
+
+func (t *tester) primary() bool {
+	a, ok := t.peek(0)
+	if !ok {
+		t.err = "argument expected"
 		return false
-	case 1:
-		return a[0] != ""
-	case 2:
-		p := s.resolve(a[1])
-		switch a[0] {
-		case "-z":
-			return a[1] == ""
-		case "-n":
-			return a[1] != ""
-		case "-e", "-a":
-			_, err := s.fs.Stat(s.user.Name, p)
-			return err == nil
-		case "-f":
-			n, err := s.fs.Stat(s.user.Name, p)
-			return err == nil && !n.IsDir()
-		case "-d":
-			n, err := s.fs.Stat(s.user.Name, p)
-			return err == nil && n.IsDir()
-		case "-L", "-h":
-			n, err := s.fs.Lstat(s.user.Name, p)
-			return err == nil && n.IsLink()
-		case "-s":
-			n, err := s.fs.Stat(s.user.Name, p)
-			return err == nil && n.Size() > 0
-		case "-r", "-w", "-x":
-			n, err := s.fs.Stat(s.user.Name, p)
-			want := map[string]fs.FileMode{"-r": vfs.Read, "-w": vfs.Write, "-x": vfs.Exec}[a[0]]
-			return err == nil && vfs.CanAccess(n, s.user.Name, want)
+	}
+	if op, ok := t.peek(1); ok && testBinary[op] {
+		r, _ := t.peek(2)
+		t.pos += 3
+		return t.binary(a, op, r)
+	}
+	if a == "(" {
+		t.pos++
+		r := t.or()
+		if c, _ := t.peek(0); c != ")" {
+			t.err = "missing )"
+			return false
 		}
-	case 3:
-		l, r := a[0], a[2]
-		switch a[1] {
-		case "=", "==":
-			return l == r
-		case "!=":
-			return l != r
+		t.pos++
+		return r
+	}
+	if len(a) == 2 && a[0] == '-' && strings.Contains("zneafdLhsrwxcbpSgukGOt", a[1:]) {
+		if arg, ok := t.peek(1); ok {
+			t.pos += 2
+			return t.unary(a, arg)
 		}
-		li, err1 := strconv.Atoi(l)
-		ri, err2 := strconv.Atoi(r)
+	}
+	t.pos++
+	return a != ""
+}
+
+func (t *tester) unary(op, a string) bool {
+	s := t.sh
+	switch op {
+	case "-z":
+		return a == ""
+	case "-n":
+		return a != ""
+	case "-t":
+		return a == "0" && s.cfg.Term != ""
+	}
+	p := s.resolve(a)
+	if op == "-L" || op == "-h" {
+		n, err := s.fs.Lstat(s.user.Name, p)
+		return err == nil && n.IsLink()
+	}
+	n, err := s.fs.Stat(s.user.Name, p)
+	if err != nil {
+		return false
+	}
+	switch op {
+	case "-e", "-a":
+		return true
+	case "-f":
+		return !n.IsDir() && !n.IsDevice()
+	case "-d":
+		return n.IsDir()
+	case "-c":
+		return n.IsDevice() && n.Mode&fs.ModeCharDevice != 0
+	case "-b":
+		return n.IsDevice() && n.Mode&fs.ModeCharDevice == 0
+	case "-s":
+		return n.Size() > 0
+	case "-u":
+		return n.Mode&fs.ModeSetuid != 0 || n.Mode&0o4000 != 0
+	case "-g":
+		return n.Mode&fs.ModeSetgid != 0 || n.Mode&0o2000 != 0
+	case "-k":
+		return n.Mode&fs.ModeSticky != 0 || n.Mode&0o1000 != 0
+	case "-O", "-G":
+		return n.Owner == s.user.Name
+	case "-r", "-w", "-x":
+		want := map[string]fs.FileMode{"-r": vfs.Read, "-w": vfs.Write, "-x": vfs.Exec}[op]
+		if op == "-w" && s.fs.IsReadOnly(p) {
+			return false
+		}
+		return vfs.CanAccess(n, s.user.Name, want)
+	}
+	return false
+}
+
+func (t *tester) binary(l, op, r string) bool {
+	switch op {
+	case "=", "==", "!=":
+		eq := l == r
+		if t.bash {
+			re := patternRegexp(r)
+			eq = re != nil && re.MatchString(l)
+		}
+		return eq == (op != "!=")
+	case "<":
+		return l < r
+	case ">":
+		return l > r
+	case "=~":
+		re, err := regexp.Compile(r)
+		return err == nil && re.MatchString(l)
+	case "-nt", "-ot", "-ef":
+		a, err1 := t.sh.fs.Stat(t.sh.user.Name, t.sh.resolve(l))
+		b, err2 := t.sh.fs.Stat(t.sh.user.Name, t.sh.resolve(r))
 		if err1 != nil || err2 != nil {
 			return false
 		}
-		switch a[1] {
-		case "-eq":
-			return li == ri
-		case "-ne":
-			return li != ri
-		case "-lt":
-			return li < ri
-		case "-le":
-			return li <= ri
-		case "-gt":
-			return li > ri
-		case "-ge":
-			return li >= ri
+		switch op {
+		case "-nt":
+			return a.ModTime.After(b.ModTime)
+		case "-ot":
+			return a.ModTime.Before(b.ModTime)
 		}
+		return a == b
 	}
-	return false
+	li, err1 := strconv.ParseInt(strings.TrimSpace(l), 10, 64)
+	ri, err2 := strconv.ParseInt(strings.TrimSpace(r), 10, 64)
+	if err1 != nil || err2 != nil {
+		bad := l
+		if err1 == nil {
+			bad = r
+		}
+		t.err = bad + ": bad number"
+		return false
+	}
+	switch op {
+	case "-eq":
+		return li == ri
+	case "-ne":
+		return li != ri
+	case "-lt":
+		return li < ri
+	case "-le":
+		return li <= ri
+	case "-gt":
+		return li > ri
+	}
+	return li >= ri
 }

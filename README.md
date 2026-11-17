@@ -2,8 +2,8 @@
 
 A fake SSH server that catches bots.
 
-Anyone can log in with any password or key. They get the BusyBox shell of a cheap IP
-camera, but nothing is real: every command is faked, files live in memory, and nothing
+Bots log in with the usual default passwords (`root`/`xc3511`, `admin`/`admin`, ...). They
+get the BusyBox shell of a cheap IP camera, but nothing is real: every command is faked, files live in memory, and nothing
 ever runs on your machine.
 
 Meanwhile, ssham writes down everything they do.

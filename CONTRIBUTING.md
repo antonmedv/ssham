@@ -4,7 +4,7 @@
 
 ```
 internal/server     SSH server (Wish): logins, sessions
-internal/tui        what the attacker sees: prompt and line editor (Bubble Tea)
+internal/tui        what the attacker sees: the pty, byte for byte like BusyBox's line editing
 internal/shell      the fake BusyBox ash: parsing, pipes, redirects, if/for/while, builtins
 internal/commands   the BusyBox applets: ls, cat, wget, ps, ...
 internal/rootfs     the camera's disk, as real files in rootfs/files/
@@ -23,12 +23,23 @@ ssham is a BusyBox-based IP camera. Keep it small and consistent:
 - Only the applets in `internal/commands` exist. Anything else is
   `sh: NAME: not found` (exit 127), and `busybox NAME` is
   `NAME: applet not found`. Never add a command that silently does nothing.
-- The shell is ash, not bash. Bash-only syntax (arrays, functions,
-  `[[`, `${x/a/b}`, `<(...)`) fails with ash's syntax errors.
+- The shell is BusyBox ash, which has functions, `case`, here-documents,
+  `$RANDOM` and some bash extensions (`[[`, `${x:1:2}`, `${x/a/b}`).
+  What ash lacks (arrays, `<(...)`, `function f {`) fails with ash's
+  syntax errors.
+- The camera's internet access is blocked: DNS and outside addresses time
+  out (`internal/commands/net.go`). Only the camera itself and the router
+  at 192.168.1.1 answer. Never fake a successful download.
 - `/` is a read-only squashfs. Only `/tmp`, `/var`, `/dev` and `/mnt/mtd`
   are writable, even for root.
 - Messages follow BusyBox: `cat: can't open 'x': No such file or directory`.
-- Every login is root. There is no sudo, su or useradd.
+- All sessions share one camera: the same files, and the same process
+  table (`ps` shows everyone). `reboot` really reboots it: everyone is cut
+  off for a while, and only the flash (`/mnt/mtd`) keeps its files. With
+  `-state`, files and uptime survive restarts of ssham.
+- Only `root` and `admin` (also uid 0) can log in, with a common default
+  password (see `weakPasswords` in `internal/server/auth.go`). Public keys
+  are logged and refused. There is no sudo, su or useradd.
 
 ## Add an applet
 
@@ -123,12 +134,17 @@ works (`TestBusyboxListMatchesApplets`), and the shell is fuzzed
 
 Things a careful attacker could still notice. Fixes welcome.
 
-- **Nothing persists across reconnects.** Each session starts from a fresh
-  disk, so a file written to `/mnt/mtd` is gone at the next login.
-- **The SSH handshake is Go's, not dropbear's.** The banner says
-  `dropbear_2019.78`, but the offered key exchange and cipher lists come
-  from `golang.org/x/crypto/ssh`, so SSH fingerprinting (e.g. HASSH)
-  can tell.
+- **/proc is partial.** Each process has `cmdline`, `comm`, `stat`,
+  `status`, `environ`, `maps`, `fd/`, `task/`, `exe`, `cwd` and `root`,
+  but not the dozens of other files a real kernel has.
+- **Pipelines run one stage after another**, not at once. Endless sources
+  like `/dev/urandom` are handled by rules (`internal/shell/io.go`), not
+  by real streaming.
+- **The SSH handshake is Go's, not quite dropbear's.** The algorithm lists
+  and host keys match dropbear 2019.78, but Go also offers
+  `kex-strict-s-v00@openssh.com`, sends `ext-info`, lacks `kexguess2`, and
+  lists auth methods as `password,publickey`. A fork of
+  `golang.org/x/crypto/ssh` would fix that.
 
 ## Before you push
 

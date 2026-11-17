@@ -38,6 +38,17 @@ func lookupUser(f *vfs.FS, name string) (User, bool) {
 	return User{}, false
 }
 
+// lookupUID returns the first account with uid, as getpwuid(3) does.
+func lookupUID(f *vfs.FS, uid int) (User, bool) {
+	passwd, _ := f.ReadFile("root", "/etc/passwd")
+	for _, line := range strings.Split(string(passwd), "\n") {
+		if p := strings.Split(line, ":"); len(p) >= 7 && p[2] == strconv.Itoa(uid) {
+			return lookupUser(f, p[0])
+		}
+	}
+	return User{}, false
+}
+
 func groupsOf(f *vfs.FS, user string, gid int) []string {
 	data, _ := f.ReadFile("root", "/etc/group")
 	var primary string

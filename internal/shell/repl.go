@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path"
 	"strings"
 
 	"github.com/antonmedv/ssham/internal/audit"
@@ -13,7 +14,14 @@ import (
 // Run is the interactive read-eval loop. It returns when the attacker
 // exits, the input ends, or ctx is cancelled.
 func (s *Shell) Run(ctx context.Context) int {
-	for !s.exited && ctx.Err() == nil {
+	defer s.runExitTrap(ctx, stdio{strings.NewReader(""), s.term, s.term})
+	for !s.exited && ctx.Err() == nil && s.signaled.Load() == 0 {
+		if s.pendingSig.Load() != 0 {
+			s.runPendingTrap(ctx, stdio{strings.NewReader(""), s.term, s.term})
+		}
+		if s.cfg.Mode == LoginShell {
+			s.write(s.reapJobs(true))
+		}
 		line, err := s.term.ReadLine(s.Prompt(), true)
 		if errors.Is(err, ErrInterrupt) {
 			s.status = 130
@@ -30,6 +38,11 @@ func (s *Shell) Run(ctx context.Context) int {
 			}
 			break
 		}
+		line, err = s.ReadCommand(line)
+		if errors.Is(err, ErrInterrupt) {
+			s.status = 130
+			continue
+		}
 		s.log.Event(audit.Input, "line", line)
 		s.addHistory(line)
 		s.Exec(ctx, line)
@@ -37,14 +50,68 @@ func (s *Shell) Run(ctx context.Context) int {
 	return s.exitCode
 }
 
-// Prompt renders ash's default PS1, '\w \$ ': the working directory
-// (~ for home) and # for root.
-func (s *Shell) Prompt() string {
-	sigil := "$"
-	if s.user.IsRoot() {
-		sigil = "#"
+// ReadCommand completes a command whose first line is first: while it is
+// incomplete (an open quote, an if without fi, a here-document, a line
+// ending in &&), it reads more lines at the $PS2 prompt. At the end of
+// input it returns what it has, which then fails to parse as in ash.
+func (s *Shell) ReadCommand(first string) (string, error) {
+	line := first
+	for {
+		_, err := parseInput(line, false)
+		var se *SyntaxError
+		if !errors.As(err, &se) || !se.Incomplete() {
+			return line, nil
+		}
+		more, err := s.term.ReadLine(s.renderPrompt(s.getVar("PS2")), true)
+		if errors.Is(err, ErrInterrupt) {
+			return "", err
+		}
+		if err != nil {
+			return line, nil
+		}
+		line += "\n" + more
 	}
-	return s.prettyCwd() + " " + sigil + " "
+}
+
+// Prompt renders $PS1, by default ash's '\w \$ ': the working directory
+// (~ for home) and # for root.
+func (s *Shell) Prompt() string { return s.renderPrompt(s.getVar("PS1")) }
+
+// renderPrompt expands the backslash escapes ash's fancy prompt knows.
+func (s *Shell) renderPrompt(ps string) string {
+	var b strings.Builder
+	for i := 0; i < len(ps); i++ {
+		if ps[i] != '\\' || i+1 == len(ps) {
+			b.WriteByte(ps[i])
+			continue
+		}
+		i++
+		switch ps[i] {
+		case 'w':
+			b.WriteString(s.prettyCwd())
+		case 'W':
+			b.WriteString(path.Base(s.prettyCwd()))
+		case 'u':
+			b.WriteString(s.user.Name)
+		case 'h', 'H':
+			b.WriteString(s.cfg.Host.Hostname)
+		case '$':
+			if s.user.IsRoot() {
+				b.WriteByte('#')
+			} else {
+				b.WriteByte('$')
+			}
+		case 'n':
+			b.WriteByte('\n')
+		case 'e':
+			b.WriteByte(0x1b)
+		case '[', ']':
+		default:
+			b.WriteByte('\\')
+			b.WriteByte(ps[i])
+		}
+	}
+	return b.String()
 }
 
 // prettyCwd abbreviates the home directory as ~.

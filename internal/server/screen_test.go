@@ -1,12 +1,12 @@
 package server
 
 import (
-	"github.com/charmbracelet/x/ansi"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -24,7 +24,7 @@ type screenSession struct {
 func newScreenSession(t *testing.T, user string, w, h int) *screenSession {
 	t.Helper()
 	addr, _ := startServer(t)
-	c := dial(t, addr, user, "pw")
+	c := dial(t, addr, user, "admin")
 	sess, err := c.NewSession()
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func (s *screenSession) waitScreen(want string) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	s.t.Fatalf("timed out waiting for %q on screen:\n%s", want, s.screen())
+	s.t.Fatalf("timed out waiting for %q on screen:\n%s\nraw: %q", want, s.screen(), s.raw.String())
 }
 
 func (s *screenSession) send(keys string) { _, _ = io.WriteString(s.stdin, keys) }
@@ -105,10 +105,10 @@ func TestScreenLineEditing(t *testing.T) {
 	}
 
 	// History recall with the up arrow.
-	s.send("whoami\r")
-	s.waitScreen("root\n" + prompt)
+	s.send("echo w1\r")
+	s.waitScreen(prompt + " echo w1\nw1\n" + prompt)
 	s.send("\x1b[A\x1b[A\x1b[B\r")
-	s.waitScreen("root\n" + prompt + " whoami\nroot\n" + prompt)
+	s.waitScreen("w1\n" + prompt + " echo w1\nw1\n" + prompt)
 
 	// Ctrl+C at the prompt abandons the line.
 	s.send("abandoned\x03")
@@ -124,8 +124,11 @@ func TestScreenLineEditing(t *testing.T) {
 	s.waitScreen("hostname  hosts")
 	s.send("\x15") // Ctrl+U clears the line
 
-	// A multi-line paste runs each line in order.
-	s.send("\x1b[200~echo p1\necho p2\n\x1b[201~")
+	// Lines run in order. (Typed while a command runs, the pty echoes
+	// them at once, mixed with its output, so wait for each.)
+	s.send("echo p1\r")
+	s.waitScreen(prompt + " echo p1\np1\n" + prompt)
+	s.send("echo p2\r")
 	s.waitScreen("p1\n" + prompt + " echo p2\np2\n" + prompt)
 
 	// clear (and Ctrl+L) wipe the screen.
@@ -155,10 +158,10 @@ func TestScreenLineEditing(t *testing.T) {
 	s.waitScreen(prompt + " echo kept\nkept\n" + prompt)
 }
 
-func TestNoFingerprintSequencesAndIdleIsQuiet(t *testing.T) {
+func TestRawBytesLikeBusyBox(t *testing.T) {
 	s := newScreenSession(t, "root", 80, 50)
 	s.waitScreen("~ #")
-	s.send("echo hi\r")
+	s.send("echo hx\x7fi\r")
 	s.waitScreen("hi\n~ #")
 
 	before := len(s.raw.String())
@@ -169,8 +172,12 @@ func TestNoFingerprintSequencesAndIdleIsQuiet(t *testing.T) {
 
 	s.send("exit\r")
 	_ = s.sess.Wait()
-	if m := fingerprintSeqs.FindAllString(s.raw.String(), -1); len(m) > 0 {
-		t.Errorf("raw output contains non-bash escape sequences: %q", m)
+	// lineedit echoes keys and erases with "\b \b"; output gets \r\n. No
+	// escape sequences at all: no modes, no queries, no redraws.
+	raw := s.raw.String()
+	want := "\r\n\r\nBusyBox v1.31.1 (2021-03-12 11:24:03 CST) built-in shell (ash)\r\n\r\n~ # echo hx\b \bi\r\nhi\r\n~ # exit\r\n"
+	if raw != want {
+		t.Errorf("raw output:\n%q\nwant:\n%q", raw, want)
 	}
 }
 

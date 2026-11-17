@@ -10,7 +10,9 @@ import (
 	"io"
 	"math/rand/v2"
 	"sort"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/antonmedv/ssham/internal/audit"
@@ -32,14 +34,25 @@ type Terminal interface {
 
 // Config describes the fake host and the session.
 type Config struct {
-	Host     rootfs.Host
-	User     string
-	FS       *vfs.FS // the session's private filesystem
-	Commands *Registry
-	Log      *audit.SessionLogger
-	Term     string // $TERM, empty if no pty
-	ClientIP string
-	Started  time.Time
+	Host       rootfs.Host
+	Mode       Mode
+	User       string
+	FS         *vfs.FS // the session's private filesystem
+	Commands   *Registry
+	Log        *audit.SessionLogger
+	Term       string // $TERM, empty if no pty
+	ClientIP   string
+	ClientPort int
+	// Kernel is the process table the session shares with others on the
+	// camera. Nil gives the session one of its own.
+	Kernel *rootfs.Kernel
+	// Hangup ends the session from outside, when its shell or dropbear is
+	// killed from another session.
+	Hangup func()
+	// Reboot reboots the camera, for reboot and friends.
+	Reboot  func()
+	Env     map[string]string // more variables dropbear sets
+	Started time.Time
 
 	// Clock, Rand and Sleep make sessions deterministic in tests. When nil,
 	// real time, real randomness and real sleeping are used.
@@ -48,10 +61,24 @@ type Config struct {
 	Sleep func(ctx context.Context, d time.Duration) bool
 }
 
+// Mode is how dropbear started the shell.
+type Mode int
+
+const (
+	// LoginShell is an interactive login shell on a pty: argv0 "-sh", $- "smi".
+	LoginShell Mode = iota
+	// PipedShell is a login shell reading commands from a pipe, as in
+	// `ssh host < script`: "-sh", $- "s".
+	PipedShell
+	// RunCommand is `ssh host 'cmd'`: dropbear runs sh -c, which reads no
+	// profile: "sh", $- empty.
+	RunCommand
+)
+
 // Resource limits.
 const (
 	maxCaptureBytes = 1 << 20  // per pipe stage, $(...) and redirection
-	maxDepth        = 8        // nested scripts and command substitutions
+	maxDepth        = 64       // nested shells and function calls; deeper "overflows the stack"
 	maxLineLen      = 64 << 10 // one command line
 	maxHistory      = 1000
 )
@@ -67,15 +94,46 @@ type Shell struct {
 	cwd   string
 	stack []identity // previous identities, for su, sudo -i and nested shells
 
-	vars    map[string]string
-	exports map[string]bool
-	aliases map[string]string
-	history []string
-	args    []string // $0 $1 ... while running a script
-	status  int      // $?
-	pid     int      // $$
-	nextPID int
-	jobs    int
+	vars     map[string]string
+	exports  map[string]bool
+	aliases  map[string]string
+	history  []string
+	args     []string // $0 $1 ... while running a script
+	status   int      // $?
+	pid      int      // $$: the current shell process
+	loginPID int      // the login shell
+	procs    map[int]rootfs.Proc
+	execPID  int // the process of the command being run, for Env
+	lastBg   int // $!
+	funcs    map[string]*command
+	locals   []map[string]*string // saved values for local, per function call
+	// funcDepth counts function calls; exiting is set when exit runs in
+	// one, so the whole shell unwinds rather than just the function.
+	funcDepth  int
+	exiting    bool
+	jobList    []*job
+	ffwd       *time.Duration // set while a background job runs: sleeps add up here
+	kernel     *rootfs.Kernel
+	mine       map[int]bool // the pids this session started
+	tty        string       // /dev/pts/N, if the session has a terminal
+	pty        int
+	signaled   atomic.Int32                      // a signal that ended the session
+	pendingSig atomic.Int32                      // a trapped signal whose action is to run
+	trapSnap   atomic.Pointer[map[string]string] // the traps, for kill from other sessions
+	traps      map[string]string
+	opts       map[byte]bool // set -e, -x, ...
+	condDepth  int           // > 0 while running an if/while condition or a && || operand
+	forks      int           // work done by the current command line; see maxForks
+	steps      int
+	aborted    bool
+	crashed    bool            // the shell overflowed its stack; see overflow
+	children   int             // nested child shells; see inChild
+	runCtx     context.Context // of the command line being run
+	lineno     int
+	errOut     io.Writer // stderr of the command being run, for $(...)
+	substRan   bool      // a $(...) ran while expanding the current command
+	substCode  int       // and its exit status
+	stagePID   int       // a pid a pipeline reserved for its next stage
 
 	depth     int    // script / command substitution nesting
 	loopDepth int    // nested loops, for break and continue
@@ -111,43 +169,72 @@ func New(cfg Config, term Terminal) *Shell {
 
 	// The device only has the accounts in its /etc/passwd. Any other
 	// login name gets a root shell, as on most such devices.
-	user, ok := lookupUser(cfg.FS, cfg.User)
+	login, ok := lookupUser(cfg.FS, cfg.User)
 	if !ok {
-		user, _ = lookupUser(cfg.FS, "root")
+		login, _ = lookupUser(cfg.FS, "root")
+	}
+	// The kernel only knows the uid: admin (uid 0) is root to whoami, id
+	// and ls, while dropbear sets USER and HOME from the login name.
+	user := login
+	if u, ok := lookupUID(cfg.FS, login.UID); ok {
+		user = u
 	}
 
-	r := cfg.Rand
 	s := &Shell{
 		cfg:     cfg,
 		fs:      cfg.FS,
 		term:    term,
 		log:     cfg.Log,
 		user:    user,
-		cwd:     user.Home,
+		cwd:     login.Home,
 		vars:    map[string]string{},
 		exports: map[string]bool{},
 		aliases: map[string]string{},
-		pid:     2000 + r.IntN(30000),
+		funcs:   map[string]*command{},
+		traps:   map[string]string{},
+		opts:    map[byte]bool{},
 	}
-	s.nextPID = s.pid + 1
+	if cfg.Kernel == nil {
+		s.cfg.Kernel = rootfs.NewKernel(cfg.Host.Booted, cfg.Clock())
+	}
+	s.kernel = s.cfg.Kernel
+	s.mine = map[int]bool{}
+	s.pid = s.kernel.AllocPID(0) + 1 // its dropbear child is the pid before
+	s.loginPID = s.pid
+	// ash's own variables.
+	for k, v := range map[string]string{"IFS": " \t\n", "PS1": "\\w \\$ ", "PS2": "> ", "PS4": "+ ", "OPTIND": "1"} {
+		s.vars[k] = v
+	}
+	s.startProcs()
 	// What dropbear passes to the login shell, plus what /etc/profile sets.
 	env := [][2]string{
-		{"USER", user.Name},
-		{"LOGNAME", user.Name},
-		{"HOME", user.Home},
-		{"SHELL", user.Shell},
-		{"PATH", "/bin:/sbin:/usr/bin:/usr/sbin"},
-		{"LD_LIBRARY_PATH", "/lib:/usr/lib"},
+		{"USER", login.Name},
+		{"LOGNAME", login.Name},
+		{"HOME", login.Home},
+		{"SHELL", login.Shell},
 		{"PWD", s.cwd},
-		{"SSH_CLIENT", fmt.Sprintf("%s %d 22", cfg.ClientIP, 40000+r.IntN(20000))},
-		{"SSH_CONNECTION", fmt.Sprintf("%s %d 192.168.1.108 22", cfg.ClientIP, 40000+r.IntN(20000))},
+		{"SSH_CLIENT", fmt.Sprintf("%s %d 22", cfg.ClientIP, cfg.ClientPort)},
+		{"SSH_CONNECTION", fmt.Sprintf("%s %d %s 22", cfg.ClientIP, cfg.ClientPort, cfg.Host.IP)},
+	}
+	if cfg.Mode == RunCommand {
+		// dropbear's default for root; sh -c does not read /etc/profile.
+		env = append(env, [2]string{"PATH", "/usr/sbin:/usr/bin:/sbin:/bin"})
+	} else {
+		env = append(env, [2]string{"PATH", "/bin:/sbin:/usr/bin:/usr/sbin"}, [2]string{"LD_LIBRARY_PATH", "/lib:/usr/lib"})
 	}
 	if cfg.Term != "" {
-		env = append(env, [2]string{"TERM", cfg.Term}, [2]string{"SSH_TTY", "/dev/pts/0"})
+		env = append(env, [2]string{"TERM", cfg.Term}, [2]string{"SSH_TTY", s.tty})
+	}
+	for k, v := range cfg.Env {
+		env = append(env, [2]string{k, v})
 	}
 	for _, kv := range env {
 		s.vars[kv[0]] = kv[1]
 		s.exports[kv[0]] = true
+	}
+	if p, ok := s.kernel.Get(s.pid); ok {
+		p.Environ = s.environ(true)
+		s.kernel.Add(p)
 	}
 	return s
 }
@@ -172,8 +259,13 @@ func (s *Shell) resolve(p string) string { return vfs.Abs(s.cwd, p) }
 func (s *Shell) now() time.Time { return s.cfg.Clock() }
 
 func (s *Shell) getVar(name string) string {
-	if name == "PPID" {
-		return fmt.Sprint(s.pid - 1)
+	switch name {
+	case "PPID":
+		return strconv.Itoa(s.ppid())
+	case "RANDOM":
+		return strconv.Itoa(s.cfg.Rand.IntN(32768))
+	case "LINENO":
+		return strconv.Itoa(max(1, s.lineno))
 	}
 	return s.vars[name]
 }
@@ -213,10 +305,7 @@ func (s *Shell) environ(exportedOnly bool) []string {
 	return out
 }
 
-func (s *Shell) allocPID() int {
-	s.nextPID += 1 + s.cfg.Rand.IntN(7)
-	return s.nextPID
-}
+func (s *Shell) allocPID() int { return s.kernel.AllocPID(s.cfg.Rand.IntN(3)) }
 
 func sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)

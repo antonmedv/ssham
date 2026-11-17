@@ -1,85 +1,24 @@
 package commands
 
 import (
-	"encoding/binary"
 	"fmt"
-	"hash/fnv"
-	"net"
 	"net/url"
 	"path"
 	"strings"
 	"time"
 
 	"github.com/antonmedv/ssham/internal/audit"
-	"github.com/antonmedv/ssham/internal/rootfs"
 	"github.com/antonmedv/ssham/internal/shell"
 )
 
-// Nothing here touches the network. Downloads are logged and a placeholder
-// file is written to the in-memory filesystem, so the operator can fetch
-// the payload out-of-band.
+// Nothing here touches the network: see net.go. Every attempt is logged,
+// so the operator can fetch the payload out-of-band.
 
 func init() {
 	register(
 		shell.Command{Name: "wget", Dir: "/usr/bin", Usage: "[-c|--continue] [--spider] [-q|--quiet] [-O FILE] [-o LOGFILE]\n\t[--header 'header: value'] [-Y on/off] [-P DIR] [-S|--server-response] [-U|--user-agent AGENT] [-T SEC] URL...", Run: cmdWget},
 		shell.Command{Name: "tftp", Dir: "/usr/bin", Usage: "[OPTIONS] HOST [PORT]", Run: cmdTftp},
 	)
-}
-
-// fakeIP returns a stable, plausible address for a hostname.
-func fakeIP(host string) string {
-	if ip := net.ParseIP(host); ip != nil {
-		return host
-	}
-	h := fnv.New32a()
-	h.Write([]byte(host))
-	v := h.Sum32()
-	return fmt.Sprintf("%d.%d.%d.%d", 23+v%180, (v>>8)%256, (v>>16)%256, 1+(v>>24)%253)
-}
-
-// archOf guesses which CPU a downloaded binary is for from its name, the
-// way bots name their builds: bot.mips, bot.arm7, x86, ...
-func archOf(name string) (machine uint16, bigEndian bool) {
-	n := strings.ToLower(name)
-	switch {
-	case strings.Contains(n, "mpsl") || strings.Contains(n, "mipsel"):
-		return 8, false
-	case strings.Contains(n, "mips"):
-		return 8, true
-	case strings.Contains(n, "x86_64") || strings.Contains(n, "amd64"):
-		return 62, false
-	case strings.Contains(n, "x86") || strings.Contains(n, "i686") || strings.Contains(n, "i586") || strings.Contains(n, "i386"):
-		return 3, false
-	case strings.Contains(n, "ppc") || strings.Contains(n, "powerpc"):
-		return 20, true
-	case strings.Contains(n, "sh4"):
-		return 42, false
-	case strings.Contains(n, "aarch64") || strings.Contains(n, "arm64"):
-		return 183, false
-	}
-	return 40, false // arm, or unknown
-}
-
-// payload returns placeholder content for a downloaded file: a script
-// header for .sh files, otherwise a binary for the CPU its name suggests,
-// of plausible size (wget reports that size and ls shows it).
-func payload(e *shell.Env, name string) []byte {
-	if strings.HasSuffix(name, ".sh") {
-		return []byte("#!/bin/sh\n")
-	}
-	b := make([]byte, 20_000+e.Rand().IntN(100_000))
-	for i := range b {
-		b[i] = byte(e.Rand().Uint32())
-	}
-	copy(b, rootfs.Binary(int64(len(b))).Data)
-	machine, big := archOf(name)
-	if big {
-		b[5] = 2
-		binary.BigEndian.PutUint16(b[18:], machine)
-	} else {
-		binary.LittleEndian.PutUint16(b[18:], machine)
-	}
-	return b
 }
 
 // cmdWget is BusyBox wget: plain http and ftp only.
@@ -118,13 +57,21 @@ func cmdWget(e *shell.Env) int {
 		if port == "" {
 			port = map[string]string{"http": "80", "ftp": "21"}[u.Scheme]
 		}
+		ip, kind, ok := resolve(e, u.Hostname())
+		if !ok {
+			e.Errorf("bad address '%s'", u.Hostname())
+			status = 1
+			continue
+		}
 		if !quiet {
-			fmt.Fprintf(e.Stderr, "Connecting to %s (%s:%s)\n", u.Hostname(), fakeIP(u.Hostname()), port)
+			fmt.Fprintf(e.Stderr, "Connecting to %s (%s:%s)\n", u.Hostname(), ip, port)
 		}
-		if !e.Sleep(time.Duration(300+e.Rand().IntN(700)) * time.Millisecond) {
-			return 1
+		data, err := wgetFetch(e, kind, ip, port, u)
+		if err != nil {
+			e.Errorf("%s", err)
+			status = 1
+			continue
 		}
-		data := payload(e, path.Base(u.Path))
 		if name == "-" {
 			_, _ = e.Stdout.Write(data)
 			continue
@@ -140,6 +87,39 @@ func cmdWget(e *shell.Env) int {
 		}
 	}
 	return status
+}
+
+// wgetFetch is what the camera's network gives wget: its own web server
+// and the router's login page answer, everything else fails.
+func wgetFetch(e *shell.Env, kind hostKind, ip, port string, u *url.URL) ([]byte, error) {
+	switch kind {
+	case hostOutside:
+		e.Sleep(connectTimeout)
+		return nil, fmt.Errorf("can't connect to remote host (%s): Connection timed out", ip)
+	case hostLAN:
+		e.Sleep(arpTimeout)
+		return nil, fmt.Errorf("can't connect to remote host (%s): No route to host", ip)
+	case hostGateway:
+		if port == "80" && u.Scheme == "http" {
+			return nil, fmt.Errorf("server returned error: HTTP/1.1 401 Unauthorized")
+		}
+	case hostSelf:
+		switch {
+		case port == "22":
+			return nil, fmt.Errorf("server returned error: SSH-2.0-dropbear_2019.78")
+		case port == "80" && u.Scheme == "http":
+			p := path.Clean("/" + u.Path)
+			if p == "/" {
+				p = "/index.html"
+			}
+			data, err := e.FS.AsRoot().ReadFile("/app/www" + p)
+			if err != nil {
+				return nil, fmt.Errorf("server returned error: HTTP/1.1 404 Not Found")
+			}
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("can't connect to remote host (%s): Connection refused", ip)
 }
 
 // wgetSize formats a size the way BusyBox's progress bar does: 27416, 119k.
@@ -166,17 +146,30 @@ func cmdTftp(e *shell.Env) int {
 	if remote == "" {
 		remote = local
 	}
-	if o.Has("p") { // upload: nothing to do but log it
-		e.Log(audit.Download, "tool", "tftp-put", "url", "tftp://"+host+"/"+remote, "dest", local)
-		return 0
+	tool := "tftp"
+	if o.Has("p") {
+		tool = "tftp-put"
 	}
-	e.Log(audit.Download, "tool", "tftp", "url", "tftp://"+host+"/"+remote, "dest", local)
-	if !e.Sleep(time.Duration(500+e.Rand().IntN(1500)) * time.Millisecond) {
+	e.Log(audit.Download, "tool", tool, "url", "tftp://"+host+"/"+remote, "dest", local)
+	if _, _, ok := resolve(e, host); !ok {
+		e.Errorf("bad address '%s'", host)
 		return 1
 	}
-	if err := e.FS.WriteFile(local, payload(e, remote)); err != nil {
-		e.Errorf("can't open '%s': %s", local, err)
-		return 1
+	if o.Has("p") {
+		if _, err := e.FS.ReadFile(local); err != nil {
+			e.Errorf("can't open '%s': %s", local, err)
+			return 1
+		}
+	} else {
+		if err := e.FS.WriteFile(local, nil); err != nil {
+			e.Errorf("can't open '%s': %s", local, err)
+			return 1
+		}
+		defer func() { _ = e.FS.Remove(local, false) }()
 	}
-	return 0
+	// No server answers: tftp retries for a while, then gives up and
+	// removes the file it created.
+	e.Sleep(15 * time.Second)
+	e.Errorf("timeout")
+	return 1
 }

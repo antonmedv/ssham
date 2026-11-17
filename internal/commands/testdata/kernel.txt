@@ -1,0 +1,95 @@
+// /dev has real device nodes.
+$ ls -l /dev/null /dev/urandom /dev/mtdblock4 | cat
+brw-------    1 root     root       31,    4 Oct  3 15:42 /dev/mtdblock4
+crw-rw-rw-    1 root     root        1,    3 Oct  3 15:42 /dev/null
+crw-rw-rw-    1 root     root        1,    9 Oct  3 15:42 /dev/urandom
+$ head -c 16 /dev/urandom | wc -c; head -c 5 /dev/zero | wc -c; echo hi > /dev/null; cat /dev/null | wc -c
+16
+5
+0
+$ cp /dev/null /tmp/empty; ls -l /tmp/empty | cat
+-rw-r--r--    1 root     root             0 Nov 17 20:00 /tmp/empty
+
+// /proc is made from the same process table as ps.
+$ ls /proc | head -5
+1
+10
+11
+12
+121
+$ cat /proc/uptime /proc/loadavg
+3903480.00 3630236.40
+0.55 0.46 0.41 1/69 8204
+$ echo $$; cat /proc/$$/cmdline | tr '\000' ' '; echo
+8178
+-sh 
+$ head -4 /proc/self/status
+Name:	head
+Umask:	0022
+State:	R (running)
+Tgid:	8212
+$ readlink /proc/126/exe; cat /proc/126/comm
+/app/ipcam
+ipcam
+$ sh -c 'echo $$ $PPID' ; echo $PPID
+8216 8178
+8177
+$ ps | grep -c zzz
+1
+$ ps | grep zzz
+ 8221 root      1240 S    grep zzz
+$ ls -l /proc/cpuinfo | cat
+-r--r--r--    1 root     root             0 Nov 17 20:00 /proc/cpuinfo
+
+// Everything ps shows exists, and the logs agree with the session.
+$ ls -l /sbin/init /sbin/syslogd /sbin/getty /bin/umount | cat
+lrwxrwxrwx    1 root     root             7 Mar 12  2021 /bin/umount -> busybox
+lrwxrwxrwx    1 root     root            14 Mar 12  2021 /sbin/getty -> ../bin/busybox
+lrwxrwxrwx    1 root     root            14 Mar 12  2021 /sbin/init -> ../bin/busybox
+lrwxrwxrwx    1 root     root            14 Mar 12  2021 /sbin/syslogd -> ../bin/busybox
+$ init; umount /tmp; umount /nope
+init: must be run as PID 1
+umount: can't unmount /tmp: Device or resource busy
+umount: can't unmount /nope: Invalid argument
+[exit 1]
+$ logread
+Oct  3 15:42:06 ipcam syslog.info syslogd started: BusyBox v1.31.1
+Oct  3 15:42:06 ipcam authpriv.info dropbear[124]: Running in background
+Nov 17 19:59:59 ipcam authpriv.info dropbear[8177]: Child connection from 203.0.113.9:51514
+Nov 17 20:00:00 ipcam authpriv.notice dropbear[8177]: Password auth succeeded for 'root' from 203.0.113.9:51514
+$ dmesg | grep -E 'command line|MTD|0x0000'
+[    0.000000] Kernel command line: mem=64M console=ttyAMA0,115200 root=/dev/mtdblock3 rootfstype=squashfs mtdparts=sfc:256K(boot),64K(env),1600K(kernel),4736K(rootfs),1536K(config)
+[    0.586512] 5 cmdlinepart partitions found on MTD device sfc
+[    0.592305] Creating 5 MTD partitions on "sfc":
+[    0.596913] 0x000000000000-0x000000040000 : "boot"
+[    0.602943] 0x000000040000-0x000000050000 : "env"
+[    0.608792] 0x000000050000-0x0000001e0000 : "kernel"
+[    0.614841] 0x0000001e0000-0x000000680000 : "rootfs"
+[    0.620912] 0x000000680000-0x000000800000 : "config"
+$ cat /proc/net/dev; ifconfig eth0 | grep -E 'HWaddr|bytes'; cat /sys/class/net/eth0/address
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo:  156139    1951    0    0    0     0          0         0   156139    1951    0    0    0     0       0          0
+  eth0:460610640 3386842    0    0    0     0          0     19814 3696595560 3354442    0    0    0     0       0          0
+eth0      Link encap:Ethernet  HWaddr 00:12:41:5A:7C:E4
+          RX bytes:460610640 (439.3 MiB)  TX bytes:3696595560 (3.4 GiB)
+00:12:41:5a:7c:e4
+$ ls /var/run; cat /var/run/dropbear.pid
+^[[0;0mdropbear.pid^[[0m  ^[[0;0msyslogd.pid^[[0m
+124
+
+// Programs are full size; /dev/urandom never ends.
+$ wc -c /bin/busybox /app/ipcam | head -2; grep -c 'multi-call binary' /bin/busybox; md5sum /bin/busybox | cut -c1-8; md5sum /bin/ls | cut -c1-8
+1007208 /bin/busybox
+1843204 /app/ipcam
+1
+98aa39cd
+98aa39cd
+$ cp /bin/busybox /tmp/bb; /tmp/bb echo copy works
+bb: applet not found
+[exit 127]
+$ cat /dev/urandom | tr -dc a-z | head -c 8 | wc -c; head -c 4 /dev/zero | wc -c
+8
+4
+$ cat /dev/urandom | wc -c
+[exit 130]

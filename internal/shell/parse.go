@@ -5,14 +5,14 @@ import (
 	"strings"
 )
 
-// The parser understands the subset of BusyBox ash that attackers use:
-// lists joined by ; & && ||, pipelines, ( ) and { } groups, if, while,
-// until, for, !, redirections, and quoted words. Words are kept raw and
-// expanded only when the command runs, so that variables set by earlier
-// commands on the same line are visible to later ones.
+// The parser understands BusyBox ash: lists joined by ; & && ||,
+// pipelines, ( ) and { } groups, if, while, until, for, case, !,
+// functions, redirections, here-documents and quoted words. Words are kept
+// raw and expanded only when the command runs, so that variables set by
+// earlier commands on the same line are visible to later ones.
 //
-// Functions, arrays, case, and process substitution are not supported; they
-// fail with the syntax errors ash gives for malformed input.
+// Arrays and process substitution are not in ash; they fail with the
+// syntax errors ash gives for them.
 
 type tokKind int
 
@@ -33,12 +33,21 @@ type token struct {
 	kind tokKind
 	val  string // raw word, or redirection operator
 	fd   int    // redirection source fd
+	// For the delimiter word of a here-document: its body, and whether
+	// the delimiter was quoted (then the body is not expanded).
+	heredoc *heredoc
+}
+
+type heredoc struct {
+	body   string
+	quoted bool
 }
 
 type redir struct {
 	fd     int
-	op     string // ">", ">>", "<", ">&", "&>"
+	op     string // ">", ">>", "<", ">&", "&>", "<<"
 	target string // raw word
+	doc    *heredoc
 }
 
 // command is a simple command (words), or one compound form.
@@ -52,6 +61,23 @@ type command struct {
 	ifc      *ifClause
 	loop     *loopClause
 	forc     *forClause
+	casec    *caseClause
+	fn       *funcDef // name() { ... }: defines a function
+}
+
+type caseClause struct {
+	word  string
+	items []caseItem
+}
+
+type caseItem struct {
+	patterns []string
+	body     *list
+}
+
+type funcDef struct {
+	name string
+	body *command
 }
 
 type ifClause struct {
@@ -89,6 +115,10 @@ type SyntaxError struct {
 	Unterminated bool   // an unterminated quote
 }
 
+// Incomplete reports whether more input could complete the command: an
+// interactive shell then asks for it with $PS2.
+func (e *SyntaxError) Incomplete() bool { return e.Token == "" || e.Unterminated }
+
 func (e *SyntaxError) Error() string {
 	switch {
 	case e.Unterminated:
@@ -107,7 +137,7 @@ func (e *SyntaxError) Error() string {
 var reserved = map[string]bool{
 	"if": true, "then": true, "elif": true, "else": true, "fi": true,
 	"while": true, "until": true, "for": true, "do": true, "done": true,
-	"{": true, "}": true, "!": true, "case": true, "esac": true,
+	"{": true, "}": true, "!": true, "case": true, "esac": true, "function": true,
 }
 
 func isMeta(c byte) bool {
@@ -118,13 +148,56 @@ func isMeta(c byte) bool {
 	return false
 }
 
-// lex splits src into tokens.
-func lex(src string) ([]token, error) {
+// lex splits src into tokens. Here-document bodies are read from the
+// lines after the one with their << operator. If final is false, a
+// missing here-document end is an incomplete-input error; otherwise the
+// document ends with the input, as in ash.
+func lex(src string, final bool) ([]token, error) {
 	var toks []token
+	var pending []int // tokens whose here-document body comes next
+	readDocs := func(i int) (int, error) {
+		for _, t := range pending {
+			delim, quoted := heredocDelim(toks[t].val)
+			strip := toks[t-1].val == "<<-"
+			var body strings.Builder
+			found := false
+			for i < len(src) {
+				end := strings.IndexByte(src[i:], '\n')
+				line := src[i:]
+				if end >= 0 {
+					line = src[i : i+end]
+					i += end + 1
+				} else {
+					i = len(src)
+				}
+				if strip {
+					line = strings.TrimLeft(line, "\t")
+				}
+				if line == delim {
+					found = true
+					break
+				}
+				body.WriteString(line + "\n")
+			}
+			if !found && !final {
+				return i, &SyntaxError{Expecting: delim}
+			}
+			toks[t].heredoc = &heredoc{body: body.String(), quoted: quoted}
+		}
+		pending = pending[:0]
+		return i, nil
+	}
 	i := 0
 	for i < len(src) {
 		c := src[i]
 		switch {
+		case c == '\n' && len(pending) > 0:
+			toks = append(toks, token{kind: tSemi, val: "\n"})
+			var err error
+			if i, err = readDocs(i + 1); err != nil {
+				return nil, err
+			}
+			continue
 		case c == ' ' || c == '\t' || c == '\r':
 			i++
 		case c == '#':
@@ -195,14 +268,29 @@ func lex(src string) ([]token, error) {
 				return nil, err
 			}
 			toks = append(toks, token{kind: tWord, val: w})
+			if k := len(toks); k > 1 && toks[k-2].kind == tRedir && strings.HasPrefix(toks[k-2].val, "<<") && toks[k-2].val != "<<<" {
+				pending = append(pending, k-1)
+			}
 			i += n
+		}
+	}
+	if len(pending) > 0 {
+		if _, err := readDocs(len(src)); err != nil {
+			return nil, err
 		}
 	}
 	return toks, nil
 }
 
+// heredocDelim is the word that ends a here-document. Quoting any part of
+// it turns off expansion in the body.
+func heredocDelim(w string) (string, bool) {
+	quoted := strings.ContainsAny(w, `'"\`)
+	return strings.NewReplacer(`'`, "", `"`, "", `\`, "").Replace(w), quoted
+}
+
 func lexRedirOp(s string) (string, int) {
-	for _, op := range []string{">>", ">&", ">|", "<<<", "<&", "<>", ">", "<"} {
+	for _, op := range []string{">>", ">&", ">|", "<<<", "<<-", "<<", "<&", "<>", ">", "<"} {
 		if strings.HasPrefix(s, op) {
 			if op == ">|" {
 				return ">", 2
@@ -281,6 +369,17 @@ func skipQuoted(s string) (int, error) {
 		}
 		return 0, errUnterminated
 	case '$':
+		if len(s) > 1 && s[1] == '\'' {
+			for i := 2; i < len(s); i++ {
+				switch s[i] {
+				case '\\':
+					i++
+				case '\'':
+					return i + 1, nil
+				}
+			}
+			return 0, errUnterminated
+		}
 		if len(s) > 1 && s[1] == '(' {
 			depth := 0
 			i := 1
@@ -362,9 +461,13 @@ func (p *parser) expect(w string) error {
 }
 
 // parse turns src into a list. An empty or comment-only line yields an
-// empty list.
-func parse(src string) (*list, error) {
-	toks, err := lex(src)
+// empty list. src is all the input there is.
+func parse(src string) (*list, error) { return parseInput(src, true) }
+
+// parseInput parses src; with final false, a here-document without its end
+// is incomplete input rather than ending at the end of src.
+func parseInput(src string, final bool) (*list, error) {
+	toks, err := lex(src, final)
 	if err != nil {
 		return nil, err
 	}
@@ -382,11 +485,11 @@ func parse(src string) (*list, error) {
 // endsList reports whether the next token closes the enclosing construct.
 func (p *parser) endsList() bool {
 	t := p.peek()
-	if t == nil || t.kind == tRParen {
+	if t == nil || t.kind == tRParen || t.kind == tDSemi {
 		return true
 	}
 	switch p.peekWord() {
-	case "then", "elif", "else", "fi", "do", "done", "}":
+	case "then", "elif", "else", "fi", "do", "done", "}", "esac":
 		return true
 	}
 	return false
@@ -419,7 +522,7 @@ func (p *parser) parseList() (*list, error) {
 						return nil, p.unexpected("")
 					}
 				}
-			case tRParen:
+			case tRParen, tDSemi:
 			case tWord:
 				if !p.endsList() {
 					return nil, p.unexpected("")
@@ -477,8 +580,15 @@ func (p *parser) parseCommand() (*command, error) {
 		if err := p.parseCompound(c); err != nil {
 			return nil, err
 		}
+		if c.fn != nil {
+			return c, nil
+		}
+	case t.kind == tWord && p.isFuncDef():
+		name := t.val
+		p.pos += 3
+		return p.parseFuncBody(c, name)
 	}
-	compound := c.subshell != nil || c.brace != nil || c.ifc != nil || c.loop != nil || c.forc != nil
+	compound := c.subshell != nil || c.brace != nil || c.ifc != nil || c.loop != nil || c.forc != nil || c.casec != nil
 
 	for t := p.peek(); t != nil; t = p.peek() {
 		switch t.kind {
@@ -499,11 +609,11 @@ func (p *parser) parseCommand() (*command, error) {
 			if nt == nil || nt.kind != tWord {
 				return nil, p.unexpected("")
 			}
-			c.redirs = append(c.redirs, redir{fd: t.fd, op: t.val, target: nt.val})
+			c.redirs = append(c.redirs, redir{fd: t.fd, op: t.val, target: nt.val, doc: nt.heredoc})
 			p.pos++
 			continue
 		case tLParen:
-			// name() { ... } and a=(1 2) are not supported.
+			// a=(1 2): ash has no arrays.
 			return nil, p.unexpected("")
 		}
 		break
@@ -586,10 +696,115 @@ func (p *parser) parseCompound(c *command) error {
 		}
 		c.forc.body, err = p.parseDoGroup()
 		return err
+	case "case":
+		return p.parseCase(c)
+	case "function":
+		// bash's function NAME [()] BODY, which ash accepts too.
+		name := p.peekWord()
+		if !isName(name) {
+			return p.unexpected("")
+		}
+		p.pos++
+		if t := p.peek(); t != nil && t.kind == tLParen {
+			if n := p.peekAt(1); n == nil || n.kind != tRParen {
+				return p.unexpected("")
+			}
+			p.pos += 2
+		}
+		_, err := p.parseFuncBody(c, name)
+		return err
 	}
 	// then, fi, done, case, ... where a command should start.
 	p.pos--
 	return p.unexpected("")
+}
+
+func (p *parser) peekAt(n int) *token {
+	if p.pos+n < len(p.toks) {
+		return &p.toks[p.pos+n]
+	}
+	return nil
+}
+
+// isFuncDef reports whether the next tokens are NAME ( ).
+func (p *parser) isFuncDef() bool {
+	t, open, close := p.peek(), p.peekAt(1), p.peekAt(2)
+	return t != nil && t.kind == tWord && isName(t.val) && !reserved[t.val] &&
+		open != nil && open.kind == tLParen && close != nil && close.kind == tRParen
+}
+
+// parseFuncBody parses the compound command that is a function's body.
+func (p *parser) parseFuncBody(c *command, name string) (*command, error) {
+	p.skipNewlines()
+	t := p.peek()
+	if t == nil {
+		return nil, p.unexpected("")
+	}
+	if t.kind != tLParen && !(t.kind == tWord && reserved[t.val] && t.val != "function") {
+		return nil, p.unexpected("")
+	}
+	body, err := p.parseCommand()
+	if err != nil {
+		return nil, err
+	}
+	c.fn = &funcDef{name: name, body: body}
+	return c, nil
+}
+
+// parseCase parses the rest of case WORD in PATTERN) LIST ;; ... esac.
+func (p *parser) parseCase(c *command) error {
+	word := p.peekWord()
+	if word == "" {
+		return p.unexpected("")
+	}
+	p.pos++
+	if err := p.expect("in"); err != nil {
+		return err
+	}
+	c.casec = &caseClause{word: word}
+	for {
+		p.skipNewlines()
+		if p.peekWord() == "esac" {
+			p.pos++
+			return nil
+		}
+		if t := p.peek(); t != nil && t.kind == tLParen {
+			p.pos++
+		}
+		var item caseItem
+		for {
+			w := p.peekWord()
+			if w == "" {
+				return p.unexpected("")
+			}
+			item.patterns = append(item.patterns, w)
+			p.pos++
+			t := p.peek()
+			if t != nil && t.kind == tPipe {
+				p.pos++
+				continue
+			}
+			if t == nil || t.kind != tRParen {
+				return p.unexpected(")")
+			}
+			p.pos++
+			break
+		}
+		body, err := p.parseList()
+		if err != nil {
+			return err
+		}
+		item.body = body
+		c.casec.items = append(c.casec.items, item)
+		if t := p.peek(); t != nil && t.kind == tDSemi {
+			p.pos++
+			continue
+		}
+		p.skipNewlines()
+		if p.peekWord() != "esac" {
+			return p.unexpected("esac")
+		}
+	}
 }
 
 func (p *parser) parseDoGroup() (*list, error) {

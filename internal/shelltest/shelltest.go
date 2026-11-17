@@ -32,6 +32,10 @@ var Host = rootfs.Host{
 	Hostname: "ipcam",
 	Kernel:   "4.9.37",
 	Booted:   time.Date(2026, 10, 3, 7, 42, 0, 0, time.UTC),
+	IP:       "192.168.1.108",
+	MAC:      "00:12:41:5A:7C:E4",
+	WifiSSID: "HomeNet-5G",
+	WifiPSK:  "sunflower2020",
 }
 
 var (
@@ -97,15 +101,16 @@ func WithCommands(cmds ...shell.Command) Option {
 func New(t testing.TB, user string, opts ...Option) *Session {
 	s := &Session{t: t, FS: image(), now: Start, term: &Terminal{}}
 	cfg := shell.Config{
-		Host:     Host,
-		User:     user,
-		FS:       s.FS,
-		Commands: commands.Registry(),
-		Log:      audit.New(&s.log).Session("test", "203.0.113.9:50000"),
-		ClientIP: "203.0.113.9",
-		Started:  Start,
-		Clock:    func() time.Time { return s.now },
-		Rand:     rand.New(rand.NewPCG(1, 2)),
+		Host:       Host,
+		User:       user,
+		FS:         s.FS,
+		Commands:   commands.Registry(),
+		Log:        audit.New(&s.log).Session("test", "203.0.113.9:50000"),
+		ClientIP:   "203.0.113.9",
+		ClientPort: 51514,
+		Started:    Start,
+		Clock:      func() time.Time { return s.now },
+		Rand:       rand.New(rand.NewPCG(1, 2)),
 		Sleep: func(ctx context.Context, d time.Duration) bool {
 			if d > s.budget {
 				s.now = s.now.Add(s.budget)
@@ -131,6 +136,9 @@ func (s *Session) Run(line string, input ...string) (output string, status int) 
 	s.term.out.Reset()
 	s.term.input = input
 	s.budget = SleepBudget
+	// Like the prompt, a command that is not complete reads more lines
+	// (here-document bodies, ...) from input.
+	line, _ = s.Shell.ReadCommand(line)
 	status = s.Shell.Exec(context.Background(), line)
 	return s.term.out.String(), status
 }

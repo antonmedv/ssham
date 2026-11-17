@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/antonmedv/ssham/internal/rootfs"
 	"github.com/antonmedv/ssham/internal/shell"
 )
 
@@ -22,49 +23,52 @@ func cmdPing(e *shell.Env) int {
 		return e.Usage()
 	}
 	host := o.Args[0]
-	count := -1
+	count, deadline := -1, -1
 	if c, ok := o.Value("c"); ok {
 		fmt.Sscan(c, &count)
 	}
-	ip := fakeIP(host)
-	base := 8 + e.Rand().Float64()*30
+	if w, ok := o.Value("w"); ok {
+		fmt.Sscan(w, &deadline)
+	}
+	ip, kind, ok := resolve(e, host)
+	if !ok {
+		e.Errorf("bad address '%s'", host)
+		return 1
+	}
+	// Only the camera and the router answer; see net.go.
+	var base float64
+	switch kind {
+	case hostSelf:
+		base = 0.04
+	case hostGateway:
+		base = 0.45
+	}
 	e.Printf("PING %s (%s): 56 data bytes\n", host, ip)
-	sent := 0
+	sent, received := 0, 0
 	minRTT, maxRTT, total := 1e9, 0.0, 0.0
-	for count < 0 || sent < count {
+	for (count < 0 || sent < count) && (deadline < 0 || sent < deadline) {
 		if sent > 0 && !e.Sleep(time.Second) {
 			break
 		}
-		rtt := base + e.Rand().Float64()*2
-		minRTT, maxRTT, total = min(minRTT, rtt), max(maxRTT, rtt), total+rtt
-		e.Printf("64 bytes from %s: seq=%d ttl=%d time=%.3f ms\n", ip, sent, 50+len(host)%10, rtt)
+		if base > 0 {
+			rtt := base + e.Rand().Float64()*base*1.5
+			minRTT, maxRTT, total = min(minRTT, rtt), max(maxRTT, rtt), total+rtt
+			e.Printf("64 bytes from %s: seq=%d ttl=64 time=%.3f ms\n", ip, sent, rtt)
+			received++
+		}
 		sent++
 	}
-	e.Printf("\n--- %s ping statistics ---\n%d packets transmitted, %d packets received, 0%% packet loss\n", host, sent, sent)
-	if sent > 0 {
-		e.Printf("round-trip min/avg/max = %.3f/%.3f/%.3f ms\n", minRTT, total/float64(sent), maxRTT)
+	if received == 0 && count > 0 && deadline < 0 {
+		e.Sleep(10 * time.Second) // -W 10: how long ping waits for a reply
 	}
-	return 0
+	e.Printf("\n--- %s ping statistics ---\n%d packets transmitted, %d packets received, %d%% packet loss\n",
+		host, sent, received, (sent-received)*100/max(sent, 1))
+	if received > 0 {
+		e.Printf("round-trip min/avg/max = %.3f/%.3f/%.3f ms\n", minRTT, total/float64(received), maxRTT)
+		return 0
+	}
+	return 1
 }
-
-const ifconfigText = `eth0      Link encap:Ethernet  HWaddr 00:12:41:5A:7C:E4
-          inet addr:192.168.1.108  Bcast:192.168.1.255  Mask:255.255.255.0
-          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
-          RX packets:3018473 errors:0 dropped:0 overruns:0 frame:0
-          TX packets:5523128 errors:0 dropped:0 overruns:0 carrier:0
-          collisions:0 txqueuelen:1000
-          RX bytes:412859221 (393.7 MiB)  TX bytes:3921884105 (3.6 GiB)
-          Interrupt:43
-
-lo        Link encap:Local Loopback
-          inet addr:127.0.0.1  Mask:255.0.0.0
-          UP LOOPBACK RUNNING  MTU:65536  Metric:1
-          RX packets:1834 errors:0 dropped:0 overruns:0 frame:0
-          TX packets:1834 errors:0 dropped:0 overruns:0 carrier:0
-          collisions:0 txqueuelen:1000
-          RX bytes:146720 (143.2 KiB)  TX bytes:146720 (143.2 KiB)
-
-`
 
 func cmdIfconfig(e *shell.Env) int {
 	o := e.Flags()
@@ -79,8 +83,48 @@ func cmdIfconfig(e *shell.Env) int {
 		e.Errorf("%s: error fetching interface information: Device not found", o.Args[0])
 		return 1
 	}
-	e.Print(ifconfigText)
+	h := e.Host()
+	stats := rootfs.NetDev(e.Now().Sub(h.Booted))
+	show := func(name string) bool { return len(o.Args) == 0 || o.Args[0] == name }
+	if show("eth0") {
+		i := stats[0]
+		e.Printf("eth0      Link encap:Ethernet  HWaddr %s\n", h.MAC)
+		e.Printf("          inet addr:%s  Bcast:192.168.1.255  Mask:255.255.255.0\n", h.IP)
+		e.Print("          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1\n")
+		e.Printf("          RX packets:%d errors:0 dropped:0 overruns:0 frame:0\n", i.RxPkts)
+		e.Printf("          TX packets:%d errors:0 dropped:0 overruns:0 carrier:0\n", i.TxPkts)
+		e.Print("          collisions:0 txqueuelen:1000\n")
+		e.Printf("          RX bytes:%d (%s)  TX bytes:%d (%s)\n", i.RxBytes, scaledBytes(i.RxBytes), i.TxBytes, scaledBytes(i.TxBytes))
+		e.Print("          Interrupt:43\n\n")
+	}
+	if show("lo") {
+		i := stats[1]
+		e.Print("lo        Link encap:Local Loopback\n")
+		e.Print("          inet addr:127.0.0.1  Mask:255.0.0.0\n")
+		e.Print("          UP LOOPBACK RUNNING  MTU:65536  Metric:1\n")
+		e.Printf("          RX packets:%d errors:0 dropped:0 overruns:0 frame:0\n", i.RxPkts)
+		e.Printf("          TX packets:%d errors:0 dropped:0 overruns:0 carrier:0\n", i.TxPkts)
+		e.Print("          collisions:0 txqueuelen:1000\n")
+		e.Printf("          RX bytes:%d (%s)  TX bytes:%d (%s)\n\n", i.RxBytes, scaledBytes(i.RxBytes), i.TxBytes, scaledBytes(i.TxBytes))
+	}
 	return 0
+}
+
+// scaledBytes is how BusyBox ifconfig shows a byte count: 393.7 MiB.
+func scaledBytes(n uint32) string {
+	v := float64(n)
+	unit := "B"
+	for _, u := range []string{"KiB", "MiB", "GiB"} {
+		if v < 1024 {
+			break
+		}
+		v /= 1024
+		unit = u
+	}
+	if unit == "B" {
+		return fmt.Sprintf("%d.0 B", n)
+	}
+	return fmt.Sprintf("%.1f %s", v, unit)
 }
 
 func cmdNetstat(e *shell.Env) int {
@@ -107,16 +151,16 @@ func cmdNetstat(e *shell.Env) int {
 		e.Printf("%s\n", line)
 	}
 	if all || o.Has("l") {
-		row("tcp", "0.0.0.0:80", "0.0.0.0:*", "LISTEN", "612/ipcam")
-		row("tcp", "0.0.0.0:554", "0.0.0.0:*", "LISTEN", "612/ipcam")
-		row("tcp", "0.0.0.0:34567", "0.0.0.0:*", "LISTEN", "612/ipcam")
-		row("tcp", "0.0.0.0:22", "0.0.0.0:*", "LISTEN", "731/dropbear")
+		row("tcp", "0.0.0.0:80", "0.0.0.0:*", "LISTEN", "126/ipcam")
+		row("tcp", "0.0.0.0:554", "0.0.0.0:*", "LISTEN", "126/ipcam")
+		row("tcp", "0.0.0.0:34567", "0.0.0.0:*", "LISTEN", "126/ipcam")
+		row("tcp", "0.0.0.0:22", "0.0.0.0:*", "LISTEN", "124/dropbear")
 	}
 	if !o.Has("l") {
-		row("tcp", "192.168.1.108:22", fmt.Sprintf("%s:%d", e.Session().ClientIP, 40000+e.Session().PID%20000), "ESTABLISHED", fmt.Sprintf("%d/dropbear", e.Session().PID-1))
+		row("tcp", e.Host().IP+":22", fmt.Sprintf("%s:%d", e.Session().ClientIP, e.Session().ClientPort), "ESTABLISHED", fmt.Sprintf("%d/dropbear", e.Session().PID-1))
 	}
 	if all || o.Has("l") {
-		row("udp", "0.0.0.0:3702", "0.0.0.0:*", "", "612/ipcam")
+		row("udp", "0.0.0.0:3702", "0.0.0.0:*", "", "126/ipcam")
 	}
 	return 0
 }

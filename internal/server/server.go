@@ -3,27 +3,27 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/ssh"
 	"charm.land/wish/v2"
-	"charm.land/wish/v2/bubbletea"
-	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/antonmedv/ssham/internal/audit"
 	"github.com/antonmedv/ssham/internal/commands"
+	"github.com/antonmedv/ssham/internal/crypt"
 	"github.com/antonmedv/ssham/internal/rootfs"
 	"github.com/antonmedv/ssham/internal/shell"
 	"github.com/antonmedv/ssham/internal/tui"
@@ -33,29 +33,37 @@ import (
 // Config configures the honeypot.
 type Config struct {
 	Addr        string
-	HostKeyPath string
+	HostKeyDir  string // where the host keys are kept, generated if missing
 	Hostname    string
 	Kernel      string
 	Version     string // SSH server version string, without "SSH-2.0-"
 	MaxSessions int
-	IdleTimeout time.Duration
-	MaxTimeout  time.Duration
-	Audit       *audit.Logger
-	Log         *slog.Logger
+	// StatePath, if set, is where the camera's files, uptime and pids are
+	// kept across restarts.
+	StatePath string
+	// RebootDowntime is how long reboot keeps the camera offline.
+	RebootDowntime time.Duration
+	IdleTimeout    time.Duration
+	MaxTimeout     time.Duration
+	Audit          *audit.Logger
+	Log            *slog.Logger
 }
 
 // Server is the honeypot.
 type Server struct {
 	cfg    Config
-	base   *vfs.FS
-	host   rootfs.Host
+	dev    *device
+	stop   chan struct{}
 	active atomic.Int64
 	ssh    *ssh.Server
 }
 
 type ctxKey string
 
-const sessionIDKey ctxKey = "ssham-session-id"
+const (
+	sessionIDKey ctxKey = "ssham-session-id"
+	fsKey        ctxKey = "ssham-fs"
+)
 
 // New builds a server. Call ListenAndServe to start it.
 func New(cfg Config) (*Server, error) {
@@ -66,17 +74,42 @@ func New(cfg Config) (*Server, error) {
 		cfg.MaxSessions = 64
 	}
 	booted := time.Now().Add(-time.Duration(30+randInt(60))*24*time.Hour - time.Duration(randInt(86400))*time.Second)
-	host := rootfs.Host{Hostname: cfg.Hostname, Kernel: cfg.Kernel, Booted: booted}
-	base, err := rootfs.Build(host)
+	keys, err := loadHostKeys(cfg.HostKeyDir)
 	if err != nil {
 		return nil, err
 	}
-	shell.Install(base, commands.Registry())
-	s := &Server{cfg: cfg, host: host, base: base}
+	host := rootfs.Host{Hostname: cfg.Hostname, Kernel: cfg.Kernel, Booted: booted, Files: map[string][]byte{}}
+	host.Identify(keys[0].signer.PublicKey().Marshal())
+	for _, k := range keys {
+		host.Files[k.path] = k.dropbear
+	}
+	if cfg.RebootDowntime <= 0 {
+		cfg.RebootDowntime = 45 * time.Second
+	}
+	dev, err := newDevice(host, cfg.StatePath, cfg.RebootDowntime)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{cfg: cfg, dev: dev, stop: make(chan struct{})}
 
 	srv, err := wish.NewServer(
 		wish.WithAddress(cfg.Addr),
-		wish.WithHostKeyPath(cfg.HostKeyPath),
+		func(srv *ssh.Server) error {
+			for _, k := range keys {
+				srv.AddHostKey(k.signer)
+			}
+			srv.ServerConfigCallback = serverConfig
+			srv.ChannelHandlers = map[string]ssh.ChannelHandler{
+				"session":      ssh.DefaultSessionHandler,
+				"direct-tcpip": s.directTCPIP,
+			}
+			srv.RequestHandlers = map[string]ssh.RequestHandler{
+				"tcpip-forward":        s.tcpipForward,
+				"cancel-tcpip-forward": s.tcpipForward,
+			}
+			srv.SubsystemHandlers = map[string]ssh.SubsystemHandler{"sftp": s.sftp}
+			return nil
+		},
 		wish.WithVersion(cfg.Version),
 		wish.WithPasswordAuth(s.passwordAuth),
 		wish.WithPublicKeyAuth(s.publicKeyAuth),
@@ -88,26 +121,70 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	srv.ConnCallback = func(ctx ssh.Context, conn net.Conn) net.Conn {
-		cfg.Audit.Event(audit.Connect, "remote", conn.RemoteAddr().String())
-		return conn
+		id := sessionID(ctx)
+		if !s.dev.up(time.Now()) {
+			cfg.Audit.Event(audit.SessionRejected, "session", id, "remote", conn.RemoteAddr().String(), "reason", "rebooting")
+			return nil // the camera is rebooting
+		}
+		cfg.Audit.Event(audit.Connect, "session", id, "remote", conn.RemoteAddr().String())
+		return &loggedConn{Conn: conn, start: time.Now(), done: func(d time.Duration) {
+			cfg.Audit.Event(audit.Disconnect, "session", id, "remote", conn.RemoteAddr().String(), "duration_s", d.Seconds())
+		}}
 	}
 	s.ssh = srv
 	return s, nil
 }
 
 // ListenAndServe starts accepting connections.
-func (s *Server) ListenAndServe() error { return s.ssh.ListenAndServe() }
+func (s *Server) ListenAndServe() error {
+	go s.saveLoop()
+	return s.ssh.ListenAndServe()
+}
 
 // Serve accepts connections on l.
-func (s *Server) Serve(l net.Listener) error { return s.ssh.Serve(l) }
+func (s *Server) Serve(l net.Listener) error {
+	go s.saveLoop()
+	return s.ssh.Serve(l)
+}
 
 // Shutdown stops the server gracefully.
-func (s *Server) Shutdown(ctx context.Context) error { return s.ssh.Shutdown(ctx) }
+func (s *Server) Shutdown(ctx context.Context) error {
+	close(s.stop)
+	err := s.ssh.Shutdown(ctx)
+	if serr := s.dev.save(); serr != nil {
+		s.cfg.Log.Error("save state", "err", serr)
+	}
+	return err
+}
+
+// saveLoop saves the device's state now and then, in case ssham dies.
+func (s *Server) saveLoop() {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case <-t.C:
+			if err := s.dev.save(); err != nil {
+				s.cfg.Log.Error("save state", "err", err)
+			}
+		}
+	}
+}
 
 func randInt(n int) int {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
 	return int(uint32(b[0])|uint32(b[1])<<8|uint32(b[2])<<16|uint32(b[3])<<24) % n
+}
+
+func randomSalt() string {
+	b := make([]byte, 8)
+	for i := range b {
+		b[i] = crypt.SaltChars[randInt(len(crypt.SaltChars))]
+	}
+	return string(b)
 }
 
 func newSessionID() string {
@@ -139,19 +216,6 @@ func (s *Server) authEvent(ctx ssh.Context, method string, success bool, attrs .
 		"success", success,
 	}
 	s.cfg.Audit.Event(audit.Auth, append(base, attrs...)...)
-}
-
-func (s *Server) passwordAuth(ctx ssh.Context, password string) bool {
-	s.authEvent(ctx, "password", true, "password", password)
-	return true
-}
-
-func (s *Server) publicKeyAuth(ctx ssh.Context, key ssh.PublicKey) bool {
-	s.authEvent(ctx, "publickey", true,
-		"key_type", key.Type(),
-		"fingerprint", gossh.FingerprintSHA256(key),
-		"key", strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))))
-	return true
 }
 
 var validUser = regexp.MustCompile(`^[a-z_][a-z0-9_.-]{0,31}$`)
@@ -194,20 +258,46 @@ func (s *Server) middleware(next ssh.Handler) ssh.Handler {
 			"env", sess.Environ(),
 		)
 
-		clientIP, _, _ := net.SplitHostPort(sess.RemoteAddr().String())
+		// The session runs on the camera's shared disk and process table.
+		// Killing its shell from another session, or a reboot, hangs up
+		// the whole connection.
+		hangup := func() {
+			if c, ok := ctx.Value(ssh.ContextKeyConn).(interface{ Close() error }); ok {
+				_ = c.Close()
+			}
+		}
+		host, devFS, kernel, done := s.dev.session(hangup)
+		defer done()
+		s.setPassword(ctx, devFS, sess.User())
+		clientIP, port, _ := net.SplitHostPort(sess.RemoteAddr().String())
+		clientPort, _ := strconv.Atoi(port)
 		cfg := shell.Config{
-			Host:     s.host,
-			User:     sanitizeUser(sess.User()),
-			FS:       s.base.Clone(),
-			Commands: commands.Registry(),
-			Log:      slog,
-			ClientIP: clientIP,
-			Started:  start,
+			Host:       host,
+			Kernel:     kernel,
+			Hangup:     hangup,
+			Reboot:     func() { s.dev.reboot(time.Now()) },
+			User:       sanitizeUser(sess.User()),
+			FS:         devFS,
+			Commands:   commands.Registry(),
+			Log:        slog,
+			ClientIP:   clientIP,
+			ClientPort: clientPort,
+			Started:    start,
 		}
 
+		if ssh.AgentRequested(sess) {
+			// ssh -A: dropbear makes a socket and points SSH_AUTH_SOCK at
+			// it. Nothing listens on it here.
+			dir := fmt.Sprintf("/tmp/dropbear-%08x%08x", randInt(1<<30), randInt(1<<30))
+			cfg.Env = map[string]string{"SSH_AUTH_SOCK": fmt.Sprintf("%s/auth-%08x-0", dir, randInt(1<<30))}
+			_ = cfg.FS.Mkdir("root", dir, true)
+			_ = cfg.FS.Chmod("root", dir, 0o700)
+			slog.Event(audit.Forward, "kind", "agent")
+		}
 		var code int
 		switch {
 		case sess.RawCommand() != "":
+			cfg.Mode = shell.RunCommand
 			code = s.runExec(ctx, sess, cfg, slog)
 		case isPty:
 			cfg.Term = pty.Term
@@ -216,6 +306,7 @@ func (s *Server) middleware(next ssh.Handler) ssh.Handler {
 			}
 			code = s.runInteractive(ctx, sess, cfg, pty, winCh, slog)
 		default:
+			cfg.Mode = shell.PipedShell
 			code = s.runPiped(ctx, sess, cfg)
 		}
 		slog.Event(audit.SessionEnd, "exit_code", code, "duration_s", time.Since(start).Seconds())
@@ -223,93 +314,118 @@ func (s *Server) middleware(next ssh.Handler) ssh.Handler {
 	}
 }
 
-// runExec handles `ssh host 'command'`.
+// runExec handles `ssh host 'command'`. Output is sent as it is
+// written, stderr on its own stream, as dropbear does. With a pty (ssh -t)
+// both go to the terminal, with newlines translated.
 func (s *Server) runExec(ctx context.Context, sess ssh.Session, cfg shell.Config, slog *audit.SessionLogger) int {
 	slog.Event(audit.Input, "line", sess.RawCommand(), "mode", "exec")
 	sh := shell.New(cfg, &plainTerm{w: sess, r: bufio.NewReader(sess)})
-	out, code := sh.Capture(ctx, sess.RawCommand(), io.LimitReader(sess, 1<<20))
+	defer sh.Close()
+	budget := &outputBudget{left: maxExecOutput}
+	var stdout, stderr io.Writer = budget.wrap(sess), budget.wrap(sess.Stderr())
 	if _, _, isPty := sess.Pty(); isPty {
-		out = strings.ReplaceAll(out, "\n", "\r\n")
+		stdout = budget.wrap(crlfWriter{sess})
+		stderr = stdout
 	}
-	_, _ = io.WriteString(sess, out)
-	return code
+	return sh.Command(ctx, sess.RawCommand(), io.LimitReader(sess, 1<<20), stdout, stderr)
+}
+
+// maxExecOutput caps what one exec request can send.
+const maxExecOutput = 8 << 20
+
+// outputBudget drops output past a total size shared by several writers.
+type outputBudget struct {
+	mu   sync.Mutex
+	left int
+}
+
+func (b *outputBudget) wrap(w io.Writer) io.Writer {
+	return writerFunc(func(p []byte) (int, error) {
+		b.mu.Lock()
+		n := min(len(p), b.left)
+		b.left -= n
+		b.mu.Unlock()
+		if n > 0 {
+			if _, err := w.Write(p[:n]); err != nil {
+				return 0, err
+			}
+		}
+		return len(p), nil
+	})
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+// crlfWriter turns \n into \r\n, as a pty's output processing does.
+type crlfWriter struct{ w io.Writer }
+
+func (c crlfWriter) Write(p []byte) (int, error) {
+	if _, err := c.w.Write(bytes.ReplaceAll(p, []byte("\n"), []byte("\r\n"))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// setPassword makes the hash in /etc/shadow the password this connection
+// logged in with, so cracking it gives back the same password.
+func (s *Server) setPassword(ctx ssh.Context, f *vfs.FS, user string) {
+	ctx.Lock()
+	defer ctx.Unlock()
+	pw, ok := ctx.Value(passwordKey).(string)
+	if !ok || ctx.Value(fsKey) != nil {
+		return
+	}
+	ctx.SetValue(fsKey, true)
+	_ = rootfs.SetPassword(f, user, crypt.MD5(pw, randomSalt()), time.Time{})
 }
 
 // runPiped handles sessions with no pty and no command, e.g. a script
 // piped into `ssh host`. Lines are executed as bash would with no prompt.
 func (s *Server) runPiped(ctx context.Context, sess ssh.Session, cfg shell.Config) int {
 	sh := shell.New(cfg, &plainTerm{w: sess, r: bufio.NewReader(io.LimitReader(sess, 1<<20))})
+	defer sh.Close()
 	return sh.Run(ctx)
 }
 
-// runInteractive serves a full interactive shell through Bubble Tea.
+// runInteractive serves an interactive shell on a pty, edited the way
+// BusyBox ash's lineedit would.
 func (s *Server) runInteractive(parent context.Context, sess ssh.Session, cfg shell.Config, pty ssh.Pty, winCh <-chan ssh.Window, slog *audit.SessionLogger) int {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
-	width, height := pty.Window.Width, pty.Window.Height
-	if width <= 0 || height <= 0 {
-		width, height = 80, 24
-	}
-	// SSH_TTY in the environment stops Bubble Tea from querying terminal
-	// capabilities, which bash would never do.
-	env := []string{"TERM=" + cfg.Term, "SSH_TTY=/dev/pts/0"}
-	for _, kv := range sess.Environ() {
-		if !strings.HasPrefix(kv, "WT_SESSION=") && !strings.HasPrefix(kv, "TERM=") {
-			env = append(env, kv)
-		}
-	}
-	opts := append(bubbletea.MakeOptions(sess),
-		tea.WithOutput(filterWriter{w: sess}),
-		tea.WithEnvironment(env),
-		tea.WithWindowSize(width, height),
-	)
-
-	term := tui.NewTerm(ctx, width)
+	term := tui.New(sess, pty.Window.Width, slog)
 	sh := shell.New(cfg, term)
-	model := tui.NewModel(term, sh, slog, width)
-	prog := tea.NewProgram(model, opts...)
-	term.Attach(prog)
-
+	defer sh.Close()
+	term.Attach(sh)
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
-				prog.Quit()
 				return
-			case w := <-winCh:
-				prog.Send(tea.WindowSizeMsg{Width: w.Width, Height: w.Height})
+			case w, ok := <-winCh:
+				if !ok {
+					return
+				}
+				term.SetWidth(w.Width)
 			}
 		}
 	}()
+	go term.Run(ctx, sess)
 
-	shellDone := make(chan int, 1)
-	go func() {
-		code := 0
+	code := 0
+	func() {
 		defer func() {
 			if r := recover(); r != nil {
 				s.cfg.Log.Error("shell panic", "panic", r)
 				code = 139
 			}
-			term.Done()
-			shellDone <- code
 		}()
 		_, _ = io.WriteString(term, sh.Motd())
 		code = sh.Run(ctx)
 	}()
-
-	if _, err := prog.Run(); err != nil && !errors.Is(err, tea.ErrProgramKilled) {
-		s.cfg.Log.Debug("program exited", "err", err)
-	}
-	cancel()
-	prog.Kill()
-
-	select {
-	case code := <-shellDone:
-		return code
-	case <-time.After(2 * time.Second):
-		return 0
-	}
+	return code
 }
 
 // plainTerm is a Terminal for sessions without a pty.
@@ -330,4 +446,17 @@ func (t *plainTerm) ReadLine(prompt string, echo bool) (string, error) {
 		return "", io.EOF
 	}
 	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// loggedConn logs when the connection closes.
+type loggedConn struct {
+	net.Conn
+	start time.Time
+	once  sync.Once
+	done  func(time.Duration)
+}
+
+func (c *loggedConn) Close() error {
+	c.once.Do(func() { c.done(time.Since(c.start)) })
+	return c.Conn.Close()
 }

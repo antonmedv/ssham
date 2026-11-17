@@ -16,6 +16,10 @@ func builtinExit(e *Env) int {
 		}
 		code = n & 0xff
 	}
+	if s.funcDepth > 0 {
+		// exit in a function leaves the shell the function runs in.
+		s.exiting = true
+	}
 	if s.depth > 0 {
 		// exit inside a script or subshell ends only that.
 		s.leaving = true
@@ -29,7 +33,7 @@ func builtinExit(e *Env) int {
 	return code
 }
 
-// builtinReturn leaves a sourced file. Functions are not supported.
+// builtinReturn leaves a function or a sourced file.
 func builtinReturn(e *Env) int {
 	s := e.sh
 	code := s.status
@@ -85,10 +89,7 @@ func builtinSource(e *Env) int {
 		return 2
 	}
 	// A sourced file runs in the current shell, not a child.
-	status, ok := s.nest(false, e.Args[1:], func() int { return s.execString(e.Ctx, string(data), e.io) })
-	if !ok {
-		sh(e, "%s: maximum nesting level exceeded", name)
-	}
+	status, _ := s.nest(false, e.Args[1:], func() int { return s.execString(e.Ctx, string(data), e.io) })
 	return status
 }
 

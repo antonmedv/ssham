@@ -56,7 +56,7 @@ sudo jq -r 'select(.msg=="auth") | .password // empty' data/ssham.jsonl | sort |
 - ssham never runs real commands. Everything is fake and lives in memory.
 - The container runs as a non-root user, with a read-only filesystem, no Linux
   capabilities, and no way to gain privileges.
-- The only writable path is `./data`, which holds the host key and the log.
+- The only writable path is `./data`, which holds the host keys, the log, and the camera's state.
 - Memory, CPU and process limits stop a flood of bots from hurting your server.
 
 ## Update
@@ -68,4 +68,4 @@ git pull && docker compose build --pull && docker compose up -d
 `--pull` fetches the latest base images, so security fixes in Go and the base image
 get in too. Run this now and then, even when there are no new commits.
 
-The host key in `./data` stays the same, so returning bots see the same server.
+The host keys in `./data` stay the same, so returning bots see the same server.

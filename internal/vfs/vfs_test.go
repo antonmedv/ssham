@@ -137,8 +137,45 @@ func TestAppendTruncateTouch(t *testing.T) {
 	if _, err := f.Stat("alice", "/tmp/new"); err != nil {
 		t.Error("touch did not create the file")
 	}
-	if err := f.WriteFile("root", "/dev/null", []byte("gone"), false); err != nil {
-		t.Errorf("/dev/null: %v", err)
+}
+
+func TestDevices(t *testing.T) {
+	f := newTestFS()
+	f.Random = func(b []byte) {
+		for i := range b {
+			b[i] = 'r'
+		}
+	}
+	dev := func(p string, d Device) {
+		f.Put(p, &Node{Mode: fs.ModeDevice | fs.ModeCharDevice | 0o666, Owner: "root", Device: d, Major: 1, Minor: 3})
+	}
+	dev("/dev/null", DevNull)
+	dev("/dev/zero", DevZero)
+	dev("/dev/urandom", DevRandom)
+
+	for _, p := range []string{"/dev/null", "/dev/zero", "/dev/urandom"} {
+		if err := f.WriteFile("alice", p, []byte("gone"), false); err != nil {
+			t.Errorf("write %s: %v", p, err)
+		}
+		if n, _ := f.Stat("root", p); n.Size() != 0 || !n.IsDevice() {
+			t.Errorf("%s: size %d, device %v", p, n.Size(), n.IsDevice())
+		}
+	}
+	if b, _ := f.ReadFile("alice", "/dev/null"); len(b) != 0 {
+		t.Errorf("/dev/null read %d bytes", len(b))
+	}
+	if b, _ := f.ReadFile("alice", "/dev/zero"); len(b) == 0 || strings.Trim(string(b), "\x00") != "" {
+		t.Errorf("/dev/zero read %d bytes, not all zero", len(b))
+	}
+	if b, _ := f.ReadFile("alice", "/dev/urandom"); len(b) == 0 || strings.Trim(string(b), "r") != "" {
+		t.Errorf("/dev/urandom read %d bytes", len(b))
+	}
+	// cp of a device makes a regular file of what was read.
+	if err := f.Copy("root", "/dev/null", "/tmp/empty", false); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := f.Stat("root", "/tmp/empty"); n.IsDevice() || n.Size() != 0 {
+		t.Errorf("cp /dev/null: device %v size %d", n.IsDevice(), n.Size())
 	}
 }
 

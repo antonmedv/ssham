@@ -40,7 +40,13 @@ func (r *ttyReader) Read(p []byte) (int, error) {
 type limitedBuffer struct {
 	bytes.Buffer
 	max int
+	// endless is set when the output would never have ended, like that
+	// of cat /dev/urandom: only the first part is here.
+	endless bool
 }
+
+// endlessReader is the read end of a pipe whose writer never ends.
+type endlessReader struct{ *bytes.Reader }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	if room := b.max - b.Len(); room < len(p) {
@@ -65,3 +71,10 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "...[truncated]"
 }
+
+// Commands that stop reading once they have what they need, and filters
+// that pass an endless stream on, as far as the pipe takes it.
+var (
+	prefixReaders = map[string]bool{"head": true, "dd": true, "read": true}
+	streamFilters = map[string]bool{"cat": true, "tr": true, "sed": true, "grep": true, "egrep": true, "fgrep": true, "cut": true, "awk": true, "tee": true, "uniq": true}
+)
