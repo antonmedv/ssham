@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -250,7 +251,11 @@ func (e *expander) dollar(s string) (string, int, bool) {
 		if strings.HasPrefix(s, "$((") {
 			end := strings.Index(s, "))")
 			if end > 0 {
-				return strconv.FormatInt(arith(sh.expandOne(e.ctx, s[3:end]), sh.getVar), 10), end + 2, false
+				v, err := arith(sh.expandOne(e.ctx, s[3:end]), sh.getVar)
+				if err != nil {
+					sh.expandError(err.Error())
+				}
+				return strconv.FormatInt(v, 10), end + 2, false
 			}
 		}
 		n, err := skipQuoted(s)
@@ -264,32 +269,7 @@ func (e *expander) dollar(s string) (string, int, bool) {
 		if end < 0 {
 			return s, len(s), false
 		}
-		expr := s[2:end]
-		if strings.HasPrefix(expr, "#") && isName(expr[1:]) {
-			return strconv.Itoa(len(sh.getVar(expr[1:]))), end + 1, false
-		}
-		for _, op := range []string{":-", ":=", ":+", "-"} {
-			if name, def, ok := strings.Cut(expr, op); ok && isName(name) {
-				v := sh.getVar(name)
-				switch op {
-				case ":-", "-":
-					if v == "" {
-						v = sh.expandOne(e.ctx, def)
-					}
-				case ":=":
-					if v == "" {
-						v = sh.expandOne(e.ctx, def)
-						sh.setVar(name, v)
-					}
-				case ":+":
-					if v != "" {
-						v = sh.expandOne(e.ctx, def)
-					}
-				}
-				return v, end + 1, false
-			}
-		}
-		return sh.getVar(expr), end + 1, false
+		return e.braced(s[2:end]), end + 1, false
 	case c == '?':
 		return strconv.Itoa(sh.status), 2, false
 	case c == '$':
@@ -302,7 +282,7 @@ func (e *expander) dollar(s string) (string, int, bool) {
 		}
 		return "", 2, false
 	case c == '-':
-		return "himBHs", 2, false
+		return "i", 2, false
 	case c == '!':
 		return "", 2, false
 	case c >= '0' && c <= '9':
@@ -311,7 +291,7 @@ func (e *expander) dollar(s string) (string, int, bool) {
 			return sh.args[idx], 2, false
 		}
 		if idx == 0 {
-			return "-bash", 2, false
+			return "-sh", 2, false
 		}
 		return "", 2, false
 	case c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
@@ -322,6 +302,161 @@ func (e *expander) dollar(s string) (string, int, bool) {
 		return sh.getVar(s[1:j]), j, false
 	}
 	return "$", 1, false
+}
+
+// braced expands the forms ash supports inside ${...}. Anything else is a
+// "bad substitution", as in ash: arrays, ${var/x/y}, ${!var}, ...
+func (e *expander) braced(expr string) string {
+	sh := e.sh
+	param := func(name string) (string, bool) {
+		switch {
+		case name == "?" || name == "$" || name == "#" || name == "@" || name == "*" || name == "-" || (len(name) == 1 && name[0] >= '0' && name[0] <= '9'):
+			v, _, _ := e.dollar("$" + name)
+			return v, true
+		case isName(name):
+			_, set := sh.vars[name]
+			return sh.getVar(name), set || name == "PPID"
+		}
+		return "", false
+	}
+	if expr == "#" {
+		v, _ := param("#")
+		return v
+	}
+	if rest, ok := strings.CutPrefix(expr, "#"); ok {
+		if !isName(rest) && !(len(rest) == 1 && strings.ContainsAny(rest, "0123456789@*")) {
+			sh.expandError("syntax error: bad substitution")
+			return ""
+		}
+		v, _ := param(rest)
+		return strconv.Itoa(len(v))
+	}
+	// Split into name and operator.
+	i := 0
+	for i < len(expr) && (expr[i] == '_' || (expr[i] >= 'a' && expr[i] <= 'z') || (expr[i] >= 'A' && expr[i] <= 'Z') || (i > 0 && expr[i] >= '0' && expr[i] <= '9')) {
+		i++
+	}
+	if i == 0 && len(expr) > 0 && strings.ContainsRune("?$#@*-0123456789", rune(expr[0])) {
+		i = 1
+	}
+	name, op := expr[:i], expr[i:]
+	if name == "" {
+		sh.expandError("syntax error: bad substitution")
+		return ""
+	}
+	v, set := param(name)
+	word := func(prefix string) string { return sh.expandOne(e.ctx, strings.TrimPrefix(op, prefix)) }
+	switch {
+	case op == "":
+		return v
+	case strings.HasPrefix(op, ":-"):
+		if v == "" {
+			return word(":-")
+		}
+	case strings.HasPrefix(op, "-"):
+		if !set {
+			return word("-")
+		}
+	case strings.HasPrefix(op, ":="), strings.HasPrefix(op, "="):
+		if v == "" && (op[0] == ':' || !set) {
+			v = word(op[:strings.IndexByte(op, '=')+1])
+			sh.setVar(name, v)
+		}
+	case strings.HasPrefix(op, ":+"):
+		if v != "" {
+			return word(":+")
+		}
+		return ""
+	case strings.HasPrefix(op, "+"):
+		if set {
+			return word("+")
+		}
+		return ""
+	case strings.HasPrefix(op, ":?"), strings.HasPrefix(op, "?"):
+		if v == "" {
+			msg := word(op[:strings.IndexByte(op, '?')+1])
+			if msg == "" {
+				msg = "parameter not set"
+			}
+			sh.expandError(name + ": " + msg)
+		}
+	case strings.HasPrefix(op, "##"), strings.HasPrefix(op, "#"):
+		return trimPattern(v, word(op[:strings.LastIndexByte(op[:min(2, len(op))], '#')+1]), true, op[:min(2, len(op))] == "##")
+	case strings.HasPrefix(op, "%%"), strings.HasPrefix(op, "%"):
+		return trimPattern(v, word(op[:strings.LastIndexByte(op[:min(2, len(op))], '%')+1]), false, op[:min(2, len(op))] == "%%")
+	default:
+		sh.expandError("syntax error: bad substitution")
+		return ""
+	}
+	return v
+}
+
+// trimPattern removes the shortest (or longest) prefix or suffix of v
+// matching the glob pattern, as ${v#pat}, ${v##pat}, ${v%pat} and ${v%%pat}.
+func trimPattern(v, pattern string, prefix, longest bool) string {
+	re := patternRegexp(pattern)
+	match := func(s string) bool { return re != nil && re.MatchString(s) }
+	if prefix {
+		for i := 0; i <= len(v); i++ {
+			j := i
+			if longest {
+				j = len(v) - i
+			}
+			if match(v[:j]) {
+				return v[j:]
+			}
+		}
+		return v
+	}
+	for i := 0; i <= len(v); i++ {
+		j := len(v) - i
+		if longest {
+			j = i
+		}
+		if match(v[j:]) {
+			return v[:j]
+		}
+	}
+	return v
+}
+
+// patternRegexp compiles a shell pattern, where * and ? match any
+// character including /, unlike in path.Match.
+func patternRegexp(pattern string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch c := pattern[i]; c {
+		case '*':
+			b.WriteString("(?s:.*)")
+		case '?':
+			b.WriteString("(?s:.)")
+		case '[':
+			if end := strings.IndexByte(pattern[i+1:], ']'); end >= 0 {
+				class := pattern[i+1 : i+1+end]
+				if strings.HasPrefix(class, "!") {
+					class = "^" + class[1:]
+				}
+				b.WriteString("[" + strings.ReplaceAll(class, `\`, `\\`) + "]")
+				i += end + 1
+				continue
+			}
+			b.WriteString(regexp.QuoteMeta("["))
+		case '\\':
+			if i+1 < len(pattern) {
+				i++
+				b.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+			}
+		default:
+			b.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	b.WriteString("$")
+	re, err := regexp.Compile(b.String())
+	if err != nil {
+		return nil
+	}
+	return re
 }
 
 // glob expands a pattern against the virtual filesystem.

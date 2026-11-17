@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"path"
 	"strings"
 	"time"
 
@@ -44,11 +45,26 @@ func (e *Env) Print(s string) { _, _ = io.WriteString(e.Stdout, s) }
 // Printf writes formatted output to stdout.
 func (e *Env) Printf(format string, a ...any) { fmt.Fprintf(e.Stdout, format, a...) }
 
-// Errorf writes "name: message" and a newline to stderr, the way most
-// coreutils report errors.
+// Errorf writes "applet: message" and a newline to stderr, the way
+// BusyBox reports errors (the applet name, even if run as /bin/cat).
 func (e *Env) Errorf(format string, a ...any) {
-	fmt.Fprintf(e.Stderr, e.Args[0]+": "+format+"\n", a...)
+	fmt.Fprintf(e.Stderr, path.Base(e.Args[0])+": "+format+"\n", a...)
 }
+
+// Usage prints the applet's BusyBox usage text to stderr and returns 1,
+// the way BusyBox reacts to wrong arguments.
+func (e *Env) Usage() int {
+	fmt.Fprint(e.Stderr, e.sh.usage(path.Base(e.Args[0])))
+	return 1
+}
+
+// Applets returns every BusyBox applet name and the directory it is linked
+// from.
+func (e *Env) Applets() map[string]string { return e.sh.cfg.Commands.Applets() }
+
+// RunApplet runs an applet directly, as `busybox ls` does, without
+// looking at $PATH. Unknown names fail with "applet not found".
+func (e *Env) RunApplet(args ...string) int { return e.sh.busybox(e.Ctx, args[0], args, e.io) }
 
 // IsTTY reports whether stdout is the terminal (not a pipe or file).
 func (e *Env) IsTTY() bool { return e.Stdout == e.sh.term }
@@ -77,8 +93,8 @@ func (e *Env) ReadStdin() string {
 }
 
 // ReadFiles returns the contents of the named files concatenated, or of
-// stdin when there are none; "-" also means stdin. Errors are reported as
-// "name: file: error" and make status 1.
+// stdin when there are none; "-" also means stdin. Errors are reported the
+// BusyBox way, "applet: can't open 'file': error", and make status 1.
 func (e *Env) ReadFiles(names []string) (data string, status int) {
 	if len(names) == 0 {
 		return e.ReadStdin(), 0
@@ -91,7 +107,7 @@ func (e *Env) ReadFiles(names []string) (data string, status int) {
 		}
 		d, err := e.FS.ReadFile(name)
 		if err != nil {
-			e.Errorf("%s: %s", name, err)
+			e.Errorf("can't open '%s': %s", name, err)
 			status = 1
 			continue
 		}
@@ -221,8 +237,8 @@ func (e *Env) RunScript(src string, args ...string) int {
 func (e *Env) RunFile(path string, args ...string) int {
 	data, err := e.FS.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(e.Stderr, "%s: %s: %s\n", e.Args[0], path, err)
-		return 127
+		fmt.Fprintf(e.Stderr, "sh: can't open '%s': %s\n", path, err)
+		return 2
 	}
 	if len(args) == 0 {
 		args = []string{path}
@@ -230,24 +246,10 @@ func (e *Env) RunFile(path string, args ...string) int {
 	return e.sh.runScript(e.Ctx, e.FS.Abs(path), data, args, e.io)
 }
 
-// RunAs runs fn as user, as sudo does, then switches back. Inside fn, use
-// the Env passed to it: its FS checks permissions as user.
-func (e *Env) RunAs(user User, fn func(*Env) int) int {
-	return e.sh.runAs(user, func() int {
-		return fn(e.sh.env(e.Ctx, e.Args, e.io))
-	})
-}
-
 // Login starts a nested shell as user (su, sudo -i, bash). The attacker
 // returns to the current user with exit. If cwd is empty, the working
 // directory is kept.
 func (e *Env) Login(user User, cwd string) { e.sh.login(user, cwd) }
-
-// SudoCached reports whether sudo already asked for a password.
-func (e *Env) SudoCached() bool { return e.sh.sudoCached }
-
-// CacheSudo remembers that sudo got a password.
-func (e *Env) CacheSudo() { e.sh.sudoCached = true }
 
 // Exit ends the session, as reboot does.
 func (e *Env) Exit(code int) {

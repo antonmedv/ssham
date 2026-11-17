@@ -1,6 +1,6 @@
-// Command ssham is an SSH honeypot. It accepts any password or key, presents a
-// convincing Ubuntu shell built with Wish and Bubble Tea, and records every
-// credential, command, and download attempt as JSON lines. No command is
+// Command ssham is an SSH honeypot. It accepts any password or key, presents
+// the BusyBox shell of an IP camera, built with Wish and Bubble Tea, and
+// records every credential, command, and download attempt as JSON lines. No command is
 // ever executed on the host and no outbound connection is ever made.
 package main
 
@@ -24,9 +24,9 @@ func main() {
 	var (
 		addr        = flag.String("addr", ":2222", "address to listen on")
 		hostKey     = flag.String("host-key", ".ssh/ssham_ed25519", "path to the SSH host key (generated if missing)")
-		hostname    = flag.String("hostname", "ip-10-0-2-15", "hostname shown to attackers")
-		kernel      = flag.String("kernel", "6.8.0-48-generic", "kernel release shown by uname")
-		version     = flag.String("version", "OpenSSH_9.6p1 Ubuntu-3ubuntu13.5", "SSH server version banner (without SSH-2.0-)")
+		hostname    = flag.String("hostname", "ipcam", "hostname of the device")
+		kernel      = flag.String("kernel", "4.9.37", "kernel release shown by uname")
+		version     = flag.String("version", "dropbear_2019.78", "SSH server version banner (without SSH-2.0-)")
 		logPath     = flag.String("log", "-", "file to append JSON audit events to (- for stdout)")
 		maxSessions = flag.Int("max-sessions", 64, "maximum concurrent sessions")
 		idle        = flag.Duration("idle-timeout", 10*time.Minute, "disconnect sessions idle for this long")

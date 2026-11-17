@@ -15,31 +15,25 @@ func builtinCd(e *Env) int {
 	if len(e.Args) > 1 {
 		target = e.Args[1]
 	}
-	if len(e.Args) > 2 {
-		fmt.Fprintln(e.Stderr, "-bash: cd: too many arguments")
-		return 1
-	}
 	if target == "-" {
 		target = s.getVar("OLDPWD")
 		if target == "" {
-			fmt.Fprintln(e.Stderr, "-bash: cd: OLDPWD not set")
-			return 1
+			target = s.cwd
 		}
 		e.Printf("%s\n", target)
 	}
 	p := s.resolve(target)
 	n, err := s.fs.Stat(s.user.Name, p)
-	if err != nil {
-		fmt.Fprintf(e.Stderr, "-bash: cd: %s: %s\n", target, err)
-		return 1
-	}
-	if !n.IsDir() {
-		fmt.Fprintf(e.Stderr, "-bash: cd: %s: Not a directory\n", target)
-		return 1
-	}
-	if !vfs.CanAccess(n, s.user.Name, 1) {
-		fmt.Fprintf(e.Stderr, "-bash: cd: %s: Permission denied\n", target)
-		return 1
+	switch {
+	case err != nil:
+		sh(e, "cd: can't cd to %s: %s", target, err)
+		return 2
+	case !n.IsDir():
+		sh(e, "cd: can't cd to %s: Not a directory", target)
+		return 2
+	case !vfs.CanAccess(n, s.user.Name, vfs.Exec):
+		sh(e, "cd: can't cd to %s: Permission denied", target)
+		return 2
 	}
 	s.vars["OLDPWD"] = s.cwd
 	s.cwd = p
@@ -229,7 +223,7 @@ func builtinTest(e *Env) int {
 	args := e.Args[1:]
 	if e.Args[0] == "[" {
 		if len(args) == 0 || args[len(args)-1] != "]" {
-			fmt.Fprintln(e.Stderr, "-bash: [: missing `]'")
+			sh(e, "[: missing ]")
 			return 2
 		}
 		args = args[:len(args)-1]

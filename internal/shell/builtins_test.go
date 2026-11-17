@@ -1,6 +1,8 @@
 package shell
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestUnescape(t *testing.T) {
 	tests := []struct{ in, want string }{

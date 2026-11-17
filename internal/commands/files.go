@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,76 +15,55 @@ import (
 
 func init() {
 	register(
-		shell.Command{Name: "cat", Aliases: []string{"less", "more"}, Run: cmdCat},
-		shell.Command{Name: "touch", Run: cmdTouch},
-		shell.Command{Name: "mkdir", Run: cmdMkdir},
-		shell.Command{Name: "rmdir", Run: cmdRmdir},
-		shell.Command{Name: "rm", Aliases: []string{"shred"}, Run: cmdRm},
-		shell.Command{Name: "cp", Aliases: []string{"mv"}, Run: cmdCp},
-		shell.Command{Name: "ln", Run: cmdLn},
-		shell.Command{Name: "chmod", Run: cmdChmod},
-		shell.Command{Name: "chown", Aliases: []string{"chgrp"}, Run: cmdChown},
-		shell.Command{Name: "chattr", Run: cmdChattr},
-		shell.Command{Name: "stat", Run: cmdStat},
-		shell.Command{Name: "file", Run: cmdFile},
-		shell.Command{Name: "du", Run: cmdDu},
-		shell.Command{Name: "readlink", Aliases: []string{"realpath"}, Run: cmdReadlink},
-		shell.Command{Name: "basename", Run: cmdBasename},
-		shell.Command{Name: "dirname", Run: cmdDirname},
-		shell.Command{Name: "which", Run: cmdWhich},
-		shell.Command{Name: "whereis", Run: cmdWhereis},
-		shell.Command{Name: "tar", Aliases: []string{"gzip", "gunzip", "unzip"}, Run: cmdArchive},
-		shell.Command{Name: "dd", Run: cmdDd},
+		shell.Command{Name: "cat", Usage: "[-nb] [FILE]...", Run: cmdCat},
+		shell.Command{Name: "more", Usage: "[FILE]...", Run: cmdCat},
+		shell.Command{Name: "touch", Usage: "[-c] [-d DATE] [-t DATE] [-r FILE] FILE...", Run: cmdTouch},
+		shell.Command{Name: "mkdir", Usage: "[-m MODE] [-p] DIRECTORY...", Run: cmdMkdir},
+		shell.Command{Name: "rmdir", Usage: "[-p] DIRECTORY...", Run: cmdRmdir},
+		shell.Command{Name: "rm", Usage: "[-irf] FILE...", Run: cmdRm},
+		shell.Command{Name: "cp", Usage: "[OPTIONS] SOURCE... DEST", Run: cmdCp},
+		shell.Command{Name: "mv", Usage: "[-fin] SOURCE DEST\nor: mv [-fin] SOURCE... DIRECTORY", Run: cmdCp},
+		shell.Command{Name: "ln", Usage: "[OPTIONS] TARGET... LINK|DIR", Run: cmdLn},
+		shell.Command{Name: "chmod", Usage: "[-Rcvf] MODE[,MODE]... FILE...", Run: cmdChmod},
+		shell.Command{Name: "chown", Usage: "[-RhLHPcvf]... USER[:[GRP]] FILE...", Run: cmdChown},
+		shell.Command{Name: "basename", Dir: "/usr/bin", Usage: "FILE [SUFFIX]", Run: cmdBasename},
+		shell.Command{Name: "dirname", Dir: "/usr/bin", Usage: "FILENAME", Run: cmdDirname},
+		shell.Command{Name: "which", Dir: "/usr/bin", Usage: "[COMMAND]...", Run: cmdWhich},
+		shell.Command{Name: "tar", Usage: "-[cxtzhvO] [-f TARFILE] [-C DIR] [FILE]...", Run: cmdArchive},
+		shell.Command{Name: "gzip", Usage: "[-cfkdt] [FILE]...", Run: cmdArchive},
+		shell.Command{Name: "gunzip", Usage: "[-cfkt] [FILE]...", Run: cmdArchive},
+		shell.Command{Name: "dd", Usage: "[if=FILE] [of=FILE] [bs=N] [count=N] [skip=N] [seek=N]", Run: cmdDd},
+		shell.Command{Name: "sync", Usage: "", Run: func(*shell.Env) int { return 0 }},
 	)
 }
 
 func cmdCat(e *shell.Env) int {
 	o := e.Flags()
-	files := o.Args
-	if len(files) == 0 {
-		files = []string{"-"}
-	}
-	status := 0
-	var out bytes.Buffer
-	for _, f := range files {
-		var data []byte
-		if f == "-" {
-			data = []byte(e.ReadStdin())
-		} else {
-			var err error
-			data, err = e.FS.ReadFile(f)
-			if err != nil {
-				e.Errorf("%s: %s", f, err)
-				status = 1
-				continue
-			}
-		}
-		out.Write(data)
-	}
+	data, status := e.ReadFiles(o.Args)
 	if o.Has("n") {
-		lines := strings.SplitAfter(out.String(), "\n")
-		for i, l := range lines {
-			if l == "" {
-				continue
-			}
-			e.Printf("%6d\t%s", i+1, l)
+		for i, l := range splitLines(data) {
+			e.Printf("%6d\t%s\n", i+1, l)
 		}
 		return status
 	}
-	_, _ = e.Stdout.Write(out.Bytes())
+	e.Print(data)
 	return status
 }
 
 func cmdTouch(e *shell.Env) int {
-	o := e.Flags("d", "t", "r", "date", "reference")
+	o := e.Flags("d", "t", "r")
 	if len(o.Args) == 0 {
-		fmt.Fprintln(e.Stderr, "touch: missing file operand\nTry 'touch --help' for more information.")
-		return 1
+		return e.Usage()
 	}
 	status := 0
 	for _, f := range o.Args {
+		if o.Has("c") {
+			if _, err := e.FS.Stat(f); err != nil {
+				continue
+			}
+		}
 		if err := e.FS.Touch(f); err != nil {
-			e.Errorf("cannot touch '%s': %s", f, err)
+			e.Errorf("%s: %s", f, err)
 			status = 1
 		}
 	}
@@ -93,19 +71,18 @@ func cmdTouch(e *shell.Env) int {
 }
 
 func cmdMkdir(e *shell.Env) int {
-	o := e.Flags("m", "mode")
+	o := e.Flags("m")
 	if len(o.Args) == 0 {
-		fmt.Fprintln(e.Stderr, "mkdir: missing operand\nTry 'mkdir --help' for more information.")
-		return 1
+		return e.Usage()
 	}
 	status := 0
 	for _, d := range o.Args {
-		if err := e.FS.Mkdir(d, o.Has("p", "parents")); err != nil {
-			e.Errorf("cannot create directory '%s': %s", d, err)
+		if err := e.FS.Mkdir(d, o.Has("p")); err != nil {
+			e.Errorf("can't create directory '%s': %s", d, err)
 			status = 1
 			continue
 		}
-		if m, ok := o.Value("m", "mode"); ok {
+		if m, ok := o.Value("m"); ok {
 			if v, err := strconv.ParseUint(m, 8, 32); err == nil {
 				_ = e.FS.Chmod(d, fs.FileMode(v))
 			}
@@ -116,103 +93,129 @@ func cmdMkdir(e *shell.Env) int {
 
 func cmdRmdir(e *shell.Env) int {
 	o := e.Flags()
+	if len(o.Args) == 0 {
+		return e.Usage()
+	}
 	status := 0
 	for _, d := range o.Args {
 		if err := e.FS.Rmdir(d); err != nil {
-			e.Errorf("failed to remove '%s': %s", d, err)
+			e.Errorf("'%s': %s", d, err)
 			status = 1
 		}
 	}
 	return status
 }
 
+// cmdRm has no --preserve-root, like BusyBox. rm -r walks the tree the
+// way the real one does: it empties writable mounts and fails on the
+// read-only root and on the mount points themselves.
 func cmdRm(e *shell.Env) int {
 	o := e.Flags()
-	recursive := o.Has("r", "R", "recursive")
-	force := o.Has("f", "force")
+	recursive, force := o.Has("r", "R"), o.Has("f")
 	if len(o.Args) == 0 {
 		if force {
 			return 0
 		}
-		fmt.Fprintln(e.Stderr, "rm: missing operand\nTry 'rm --help' for more information.")
-		return 1
+		return e.Usage()
 	}
 	status := 0
+	fail := func(p string, err error) {
+		e.Errorf("can't remove '%s': %s", p, err)
+		status = 1
+	}
+	var removeAll func(p string)
+	removeAll = func(p string) {
+		n, err := e.FS.Lstat(p)
+		if err != nil {
+			if !force {
+				fail(p, err)
+			}
+			return
+		}
+		if n.IsDir() {
+			children, err := e.FS.ReadDir(p)
+			if err != nil {
+				fail(p, err)
+				return
+			}
+			for _, c := range children {
+				removeAll(path.Join(p, c.Name))
+			}
+		}
+		if err := e.FS.Remove(p, true); err != nil && !(force && errors.Is(err, vfs.ErrNotExist)) {
+			fail(p, err)
+		}
+	}
 	for _, f := range o.Args {
-		p := e.FS.Abs(f)
-		if p == "/" && recursive && !o.Has("no-preserve-root") {
-			fmt.Fprintln(e.Stderr, "rm: it is dangerous to operate recursively on '/'\nrm: use --no-preserve-root to override this failsafe")
-			status = 1
-			continue
-		}
 		if base := path.Base(f); base == "." || base == ".." {
-			fmt.Fprintf(e.Stderr, "rm: refusing to remove '.' or '..' directory: skipping '%s'\n", f)
+			e.Errorf("can't remove '.' or '..'")
 			status = 1
 			continue
 		}
-		if p == "/" {
-			// --no-preserve-root: remove every top-level entry we can.
+		n, err := e.FS.Lstat(f)
+		switch {
+		case err != nil:
+			if !force || !errors.Is(err, vfs.ErrNotExist) {
+				fail(f, err)
+			}
+		case n.IsDir() && !recursive:
+			e.Errorf("'%s' is a directory", f)
+			status = 1
+		case n.IsDir() && e.FS.Abs(f) == "/":
 			ents, _ := e.FS.ReadDir("/")
 			for _, ent := range ents {
-				if err := e.FS.Remove("/"+ent.Name, true); err != nil && !force {
-					e.Errorf("cannot remove '/%s': %s", ent.Name, err)
-					status = 1
-				}
+				removeAll("/" + ent.Name)
 			}
-			continue
+		case n.IsDir():
+			removeAll(f)
+		default:
+			if err := e.FS.Remove(f, false); err != nil {
+				fail(f, err)
+			}
 		}
-		err := e.FS.Remove(p, recursive)
-		if err == nil {
-			continue
-		}
-		if force && errors.Is(err, vfs.ErrNotExist) {
-			continue
-		}
-		e.Errorf("cannot remove '%s': %s", f, err)
-		status = 1
 	}
 	return status
 }
 
+// cmdCp implements cp and mv.
 func cmdCp(e *shell.Env) int {
-	o := e.Flags("t", "target-directory")
-	srcs := o.Args
-	dst, hasT := o.Value("t", "target-directory")
-	if !hasT {
-		if len(srcs) < 2 {
-			fmt.Fprintf(e.Stderr, "%s: missing destination file operand after '%s'\n", e.Args[0], strings.Join(srcs, " "))
-			return 1
-		}
-		dst = srcs[len(srcs)-1]
-		srcs = srcs[:len(srcs)-1]
+	o := e.Flags()
+	if len(o.Args) < 2 {
+		return e.Usage()
 	}
+	srcs, dst := o.Args[:len(o.Args)-1], o.Args[len(o.Args)-1]
+	if n, err := e.FS.Stat(dst); len(srcs) > 1 && (err != nil || !n.IsDir()) {
+		e.Errorf("'%s' is not a directory", dst)
+		return 1
+	}
+	move := path.Base(e.Args[0]) == "mv"
 	status := 0
 	for _, src := range srcs {
-		var err error
-		if e.Args[0] == "mv" {
-			err = e.FS.Rename(src, e.FS.Abs(dst))
-		} else {
-			if n, serr := e.FS.Stat(src); serr == nil && n.IsDir() && !o.Has("r", "R", "a", "recursive", "archive") {
-				e.Errorf("-r not specified; omitting directory '%s'", src)
-				status = 1
-				continue
-			} else if serr == nil && !n.IsDir() && !e.FS.Can(n, vfs.Read) {
-				e.Errorf("cannot open '%s' for reading: Permission denied", src)
-				status = 1
-				continue
-			}
-			err = e.FS.Copy(src, e.FS.Abs(dst), true)
-		}
+		n, err := e.FS.Lstat(src)
 		if err != nil {
-			if errors.Is(err, vfs.ErrNotExist) {
-				e.Errorf("cannot stat '%s': %s", src, err)
-			} else {
-				verb := "cannot create regular file"
-				if e.Args[0] == "mv" {
-					verb = "cannot move '" + src + "' to"
-				}
-				e.Errorf("%s '%s': %s", verb, dst, err)
+			e.Errorf("can't stat '%s': %s", src, err)
+			status = 1
+			continue
+		}
+		if move {
+			if err := e.FS.Rename(src, dst); err != nil {
+				e.Errorf("can't rename '%s': %s", src, err)
+				status = 1
 			}
+			continue
+		}
+		if n.IsDir() && !o.Has("r", "R", "a") {
+			e.Errorf("omitting directory '%s'", src)
+			status = 1
+			continue
+		}
+		if !n.IsDir() && !e.FS.Can(n, vfs.Read) {
+			e.Errorf("can't open '%s': %s", src, vfs.ErrPermission)
+			status = 1
+			continue
+		}
+		if err := e.FS.Copy(src, dst, true); err != nil {
+			e.Errorf("can't create '%s': %s", dst, err)
 			status = 1
 		}
 	}
@@ -222,82 +225,30 @@ func cmdCp(e *shell.Env) int {
 func cmdLn(e *shell.Env) int {
 	o := e.Flags()
 	if len(o.Args) == 0 {
-		fmt.Fprintln(e.Stderr, "ln: missing file operand")
-		return 1
+		return e.Usage()
 	}
 	target := o.Args[0]
 	link := path.Base(target)
 	if len(o.Args) > 1 {
 		link = o.Args[1]
 	}
-	p := e.FS.Abs(link)
-	if n, err := e.FS.Stat(p); err == nil && n.IsDir() {
-		p = path.Join(p, path.Base(target))
+	if n, err := e.FS.Stat(link); err == nil && n.IsDir() {
+		link = path.Join(link, path.Base(target))
 	}
-	if o.Has("f", "force") {
-		_ = e.FS.Remove(p, false)
+	if o.Has("f") {
+		_ = e.FS.Remove(link, false)
 	}
 	var err error
-	if o.Has("s", "symbolic") {
-		err = e.FS.Symlink(target, p)
+	if o.Has("s") {
+		err = e.FS.Symlink(target, link)
 	} else {
-		err = e.FS.Copy(target, p, false)
+		err = e.FS.Copy(target, link, false)
 	}
 	if err != nil {
-		e.Errorf("failed to create link '%s': %s", link, err)
+		e.Errorf("%s: %s", link, err)
 		return 1
 	}
 	return 0
-}
-
-func cmdChmod(e *shell.Env) int {
-	args := e.Args[1:]
-	recursive := false
-	var rest []string
-	for _, a := range args {
-		switch {
-		case a == "-R" || a == "--recursive":
-			recursive = true
-		case a == "-f" || a == "-v" || a == "-c":
-		default:
-			rest = append(rest, a)
-		}
-	}
-	if len(rest) < 2 {
-		fmt.Fprintln(e.Stderr, "chmod: missing operand\nTry 'chmod --help' for more information.")
-		return 1
-	}
-	spec := rest[0]
-	status := 0
-	var apply func(p, name string)
-	apply = func(p, name string) {
-		n, err := e.FS.Stat(p)
-		if err != nil {
-			e.Errorf("cannot access '%s': %s", name, err)
-			status = 1
-			return
-		}
-		mode, ok := parseChmod(spec, n.Mode)
-		if !ok {
-			e.Errorf("invalid mode: '%s'", spec)
-			status = 1
-			return
-		}
-		if err := e.FS.Chmod(p, mode); err != nil {
-			e.Errorf("changing permissions of '%s': %s", name, err)
-			status = 1
-		}
-		if recursive && n.IsDir() {
-			children, _ := e.FS.ReadDir(p)
-			for _, c := range children {
-				apply(path.Join(p, c.Name), path.Join(name, c.Name))
-			}
-		}
-	}
-	for _, f := range rest[1:] {
-		apply(e.FS.Abs(f), f)
-	}
-	return status
 }
 
 // parseChmod applies an octal or symbolic mode spec to old.
@@ -360,198 +311,83 @@ func parseChmod(spec string, old fs.FileMode) (fs.FileMode, bool) {
 	return mode, true
 }
 
+func cmdChmod(e *shell.Env) int {
+	recursive := false
+	var rest []string
+	for _, a := range e.Args[1:] {
+		switch a {
+		case "-R":
+			recursive = true
+		case "-f", "-v", "-c":
+		default:
+			rest = append(rest, a)
+		}
+	}
+	if len(rest) < 2 {
+		return e.Usage()
+	}
+	spec := rest[0]
+	if _, ok := parseChmod(spec, 0); !ok {
+		e.Errorf("invalid mode '%s'", spec)
+		return 1
+	}
+	status := 0
+	var apply func(name string)
+	apply = func(name string) {
+		n, err := e.FS.Stat(name)
+		if err != nil {
+			e.Errorf("%s: %s", name, err)
+			status = 1
+			return
+		}
+		mode, _ := parseChmod(spec, n.Mode)
+		if err := e.FS.Chmod(name, mode); err != nil {
+			e.Errorf("%s: %s", name, err)
+			status = 1
+		}
+		if recursive && n.IsDir() {
+			children, _ := e.FS.ReadDir(name)
+			for _, c := range children {
+				apply(path.Join(name, c.Name))
+			}
+		}
+	}
+	for _, f := range rest[1:] {
+		apply(f)
+	}
+	return status
+}
+
 func cmdChown(e *shell.Env) int {
 	o := e.Flags()
 	if len(o.Args) < 2 {
-		fmt.Fprintf(e.Stderr, "%s: missing operand\n", e.Args[0])
-		return 1
+		return e.Usage()
 	}
 	owner, group, _ := strings.Cut(o.Args[0], ":")
-	if e.Args[0] == "chgrp" {
-		owner, group = "", o.Args[0]
+	if _, ok := e.LookupUser(owner); owner != "" && !ok {
+		e.Errorf("unknown user %s", owner)
+		return 1
+	}
+	if group != "" && e.GroupID(group) < 0 {
+		e.Errorf("unknown group %s", group)
+		return 1
 	}
 	status := 0
 	for _, f := range o.Args[1:] {
 		if err := e.FS.Chown(f, owner, group); err != nil {
-			e.Errorf("changing ownership of '%s': %s", f, err)
+			e.Errorf("%s: %s", f, err)
 			status = 1
 		}
-	}
-	return status
-}
-
-func cmdChattr(e *shell.Env) int {
-	if !e.User().IsRoot() {
-		for _, a := range e.Args[1:] {
-			if !strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "+") && !strings.HasPrefix(a, "=") {
-				e.Errorf("Operation not permitted while setting flags on %s", a)
-				return 1
-			}
-		}
-	}
-	return 0
-}
-
-func cmdStat(e *shell.Env) int {
-	o := e.Flags("c", "format")
-	status := 0
-	for _, f := range o.Args {
-		n, err := e.FS.Lstat(f)
-		if err != nil {
-			e.Errorf("cannot statx '%s': %s", f, err)
-			status = 1
-			continue
-		}
-		if fm, ok := o.Value("c", "format"); ok {
-			r := strings.NewReplacer("%n", f, "%s", strconv.FormatInt(n.Size(), 10), "%a", strconv.FormatUint(uint64(n.Mode&0o7777), 8),
-				"%A", modeString(n), "%U", n.Owner, "%G", n.Group, "%u", uidOf(e, n.Owner), "%Y", strconv.FormatInt(n.ModTime.Unix(), 10))
-			e.Printf("%s\n", r.Replace(fm))
-			continue
-		}
-		kind := "regular file"
-		switch {
-		case n.IsDir():
-			kind = "directory"
-		case n.IsLink():
-			kind = "symbolic link"
-		case n.Size() == 0:
-			kind = "regular empty file"
-		}
-		name := f
-		if n.IsLink() {
-			name = fmt.Sprintf("%s -> %s", f, n.Target)
-		}
-		ts := n.ModTime.Format("2006-01-02 15:04:05.000000000 -0700")
-		e.Printf("  File: %s\n  Size: %-10d\tBlocks: %-10d IO Block: 4096   %s\nDevice: 801h/2049d\tInode: %-11d Links: 1\nAccess: (%04o/%s)  Uid: (%5s/%8s)   Gid: (%5s/%8s)\nAccess: %s\nModify: %s\nChange: %s\n Birth: %s\n",
-			name, n.Size(), (n.Size()+511)/512, kind, 262144+len(f)*7919%100000, n.Mode.Perm(), modeString(n),
-			uidOf(e, n.Owner), n.Owner, gidOf(e, n.Group), n.Group, ts, ts, ts, ts)
-	}
-	return status
-}
-
-func cmdFile(e *shell.Env) int {
-	o := e.Flags()
-	if len(o.Args) == 0 {
-		fmt.Fprintln(e.Stderr, "Usage: file [-bcdEhikLlNnprsSvzZ0] [--apple] [--extension] [--mime-encoding]\n            [--mime-type] [-e <testname>] [-F <separator>]  [-f <namefile>]\n            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n            <file> ...")
-		return 1
-	}
-	for _, f := range o.Args {
-		p := e.FS.Abs(f)
-		n, err := e.FS.Lstat(p)
-		if err != nil {
-			e.Printf("%s: cannot open `%s' (%s)\n", f, f, err)
-			continue
-		}
-		data, _ := e.FS.ReadFile(p)
-		if o.Has("b") {
-			e.Printf("%s\n", fileType(n, data))
-		} else {
-			e.Printf("%s: %s\n", f, fileType(n, data))
-		}
-	}
-	return 0
-}
-
-func fileType(n *vfs.Node, data []byte) string {
-	switch {
-	case n.IsDir():
-		return "directory"
-	case n.IsLink():
-		return "symbolic link to " + n.Target
-	case bytes.HasPrefix(data, []byte("\x7fELF")):
-		return "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=3f1e0a4f2b8c6e2d7a9b1c0d5e4f3a2b1c0d9e8f, for GNU/Linux 3.2.0, stripped"
-	case bytes.HasPrefix(data, []byte("\x1f\x8b")):
-		return "gzip compressed data, from Unix"
-	case len(data) == 0 && n.FakeSize == 0:
-		return "empty"
-	case bytes.HasPrefix(data, []byte("#!/bin/bash")) || bytes.HasPrefix(data, []byte("#!/usr/bin/env bash")):
-		return "Bourne-Again shell script, ASCII text executable"
-	case bytes.HasPrefix(data, []byte("#!/bin/sh")):
-		return "POSIX shell script, ASCII text executable"
-	case bytes.HasPrefix(data, []byte("#!/usr/bin/python")) || bytes.HasPrefix(data, []byte("#!/usr/bin/env python")):
-		return "Python script, ASCII text executable"
-	case bytes.HasPrefix(data, []byte("<?php")):
-		return "PHP script, ASCII text"
-	case !isText(data):
-		return "data"
-	}
-	return "ASCII text"
-}
-
-func cmdDu(e *shell.Env) int {
-	o := e.Flags("d", "max-depth")
-	targets := o.Args
-	if len(targets) == 0 {
-		targets = []string{"."}
-	}
-	format := func(n int64) string {
-		if o.Has("h", "human-readable") {
-			return humanSize(n)
-		}
-		return strconv.FormatInt(n/1024, 10)
-	}
-	status := 0
-	for _, t := range targets {
-		n, err := e.FS.Stat(t)
-		if err != nil {
-			e.Errorf("cannot access '%s': %s", t, err)
-			status = 1
-			continue
-		}
-		if !o.Has("s", "summarize") && n.IsDir() {
-			for _, c := range n.Children {
-				if c.IsDir() {
-					e.Printf("%s\t%s\n", format(treeSize(c)), path.Join(t, c.Name))
-				}
-			}
-		}
-		e.Printf("%s\t%s\n", format(treeSize(n)), t)
-	}
-	return status
-}
-
-func treeSize(n *vfs.Node) int64 {
-	total := (n.Size() + 4095) / 4096 * 4096
-	for _, c := range n.Children {
-		total += treeSize(c)
-	}
-	return total
-}
-
-func cmdReadlink(e *shell.Env) int {
-	o := e.Flags()
-	status := 0
-	for _, f := range o.Args {
-		p := e.FS.Abs(f)
-		if o.Has("f", "e", "m", "canonicalize") || e.Args[0] == "realpath" {
-			rp, err := e.FS.Realpath(p)
-			if err != nil {
-				if e.Args[0] == "realpath" {
-					e.Errorf("%s: %s", f, err)
-				}
-				status = 1
-				continue
-			}
-			e.Printf("%s\n", rp)
-			continue
-		}
-		n, err := e.FS.Lstat(p)
-		if err != nil || !n.IsLink() {
-			status = 1
-			continue
-		}
-		e.Printf("%s\n", n.Target)
 	}
 	return status
 }
 
 func cmdBasename(e *shell.Env) int {
 	if len(e.Args) < 2 {
-		fmt.Fprintln(e.Stderr, "basename: missing operand")
-		return 1
+		return e.Usage()
 	}
 	b := path.Base(e.Args[1])
-	if len(e.Args) > 2 {
+	if len(e.Args) > 2 && b != e.Args[2] {
 		b = strings.TrimSuffix(b, e.Args[2])
 	}
 	e.Printf("%s\n", b)
@@ -559,18 +395,18 @@ func cmdBasename(e *shell.Env) int {
 }
 
 func cmdDirname(e *shell.Env) int {
-	if len(e.Args) < 2 {
-		fmt.Fprintln(e.Stderr, "dirname: missing operand")
-		return 1
+	if len(e.Args) != 2 {
+		return e.Usage()
 	}
-	for _, a := range e.Args[1:] {
-		e.Printf("%s\n", path.Dir(a))
-	}
+	e.Printf("%s\n", path.Dir(e.Args[1]))
 	return 0
 }
 
 func cmdWhich(e *shell.Env) int {
 	o := e.Flags()
+	if len(o.Args) == 0 {
+		return e.Usage()
+	}
 	status := 0
 	for _, n := range o.Args {
 		if p, ok := e.LookPath(n); ok {
@@ -582,68 +418,136 @@ func cmdWhich(e *shell.Env) int {
 	return status
 }
 
-func cmdWhereis(e *shell.Env) int {
-	for _, n := range e.Args[1:] {
-		out := n + ":"
-		if p, ok := e.LookPath(n); ok {
-			out += " " + p
-			if !strings.HasPrefix(p, "/usr/") {
-				out += " /usr" + p
-			}
-			out += " /usr/share/man/man1/" + n + ".1.gz"
-		}
-		e.Printf("%s\n", out)
-	}
-	return 0
-}
-
+// cmdArchive implements tar, gzip and gunzip: they check their files and
+// pretend to work.
 func cmdArchive(e *shell.Env) int {
-	// tar, gzip, unzip and friends: pretend to work on files that exist.
+	name := path.Base(e.Args[0])
 	args := e.Args[1:]
-	if e.Args[0] == "tar" && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	if name == "tar" && len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		args = append([]string{"-" + args[0]}, args[1:]...) // tar xzf: old-style flags
 	}
 	o := shell.ParseFlags(args, "f", "C")
-	if f, ok := o.Value("f"); ok {
-		if _, err := e.FS.Stat(f); err != nil && !o.Has("c") {
-			fmt.Fprintf(e.Stderr, "%s: %s: Cannot open: %s\n%s: Error is not recoverable: exiting now\n", e.Args[0], f, err, e.Args[0])
-			return 2
+	if name == "tar" {
+		f, ok := o.Value("f")
+		if !ok && !o.Has("c", "x", "t") {
+			return e.Usage()
 		}
-		if o.Has("x") {
-			e.Log(audit.ArchiveExtract, "path", e.FS.Abs(f))
+		if ok && !o.Has("c") {
+			if _, err := e.FS.Stat(f); err != nil {
+				e.Errorf("can't open '%s': %s", f, err)
+				return 1
+			}
+			if o.Has("x") {
+				e.Log(audit.ArchiveExtract, "path", e.FS.Abs(f))
+			}
 		}
 		return 0
 	}
 	for _, f := range o.Args {
 		if _, err := e.FS.Stat(f); err != nil {
-			fmt.Fprintf(e.Stderr, "%s: %s: %s\n", e.Args[0], f, err)
+			e.Errorf("can't open '%s': %s", f, err)
 			return 1
 		}
 	}
 	return 0
 }
 
+// cmdDd copies data for real, within the in-memory filesystem: bots read
+// the first bytes of a binary (dd bs=52 count=1 if=/bin/echo) to learn the
+// CPU architecture.
 func cmdDd(e *shell.Env) int {
-	var count, bs int64 = 0, 512
+	in, out := "", ""
+	var bs, count, skip int64 = 512, -1, 0
 	for _, a := range e.Args[1:] {
-		k, v, _ := strings.Cut(a, "=")
-		n, _ := strconv.ParseInt(strings.TrimRight(v, "KMGkmgB"), 10, 64)
-		switch strings.ToUpper(strings.TrimLeft(v, "0123456789")) {
-		case "K":
-			n *= 1024
-		case "M":
-			n *= 1 << 20
-		case "G":
-			n *= 1 << 30
+		k, v, ok := strings.Cut(a, "=")
+		if !ok {
+			return e.Usage()
 		}
 		switch k {
-		case "count":
-			count = n
-		case "bs":
-			bs = n
+		case "if":
+			in = v
+		case "of":
+			out = v
+		case "bs", "count", "skip":
+			n, err := parseSize(v)
+			if err != nil {
+				e.Errorf("invalid number '%s'", v)
+				return 1
+			}
+			switch k {
+			case "bs":
+				bs = n
+			case "count":
+				count = n
+			case "skip":
+				skip = n
+			}
 		}
 	}
-	total := count * bs
-	fmt.Fprintf(e.Stderr, "%d+0 records in\n%d+0 records out\n%d bytes (%s) copied, 0.0123 s, %s/s\n", count, count, total, humanSize(total), humanSize(total*80))
+	var data []byte
+	switch in {
+	case "":
+		data = []byte(e.ReadStdin())
+	case "/dev/zero":
+		data = make([]byte, min(max(count, 1)*bs, 4<<20))
+	case "/dev/urandom", "/dev/random":
+		data = make([]byte, min(max(count, 1)*bs, 4<<20))
+		for i := range data {
+			data[i] = byte(e.Rand().Uint32())
+		}
+	default:
+		var err error
+		if data, err = e.FS.ReadFile(in); err != nil {
+			e.Errorf("can't open '%s': %s", in, err)
+			return 1
+		}
+	}
+	data = data[min(int64(len(data)), skip*bs):]
+	if count >= 0 {
+		data = data[:min(int64(len(data)), count*bs)]
+	}
+	full := int64(len(data)) / bs
+	partial := 0
+	if int64(len(data))%bs != 0 {
+		partial = 1
+	}
+	if out == "" {
+		_, _ = e.Stdout.Write(data)
+	} else if err := e.FS.WriteFile(out, data); err != nil {
+		e.Errorf("can't open '%s': %s", out, err)
+		return 1
+	}
+	secs := 0.000096 + float64(len(data))/40e6
+	fmt.Fprintf(e.Stderr, "%d+%d records in\n%d+%d records out\n%d bytes (%s) copied, %f seconds, %s/s\n",
+		full, partial, full, partial, len(data), ddSize(int64(len(data))), secs, ddSize(int64(float64(len(data))/secs)))
 	return 0
+}
+
+// parseSize parses dd numbers with optional k, M, G suffixes.
+func parseSize(v string) (int64, error) {
+	mult := int64(1)
+	switch {
+	case strings.HasSuffix(v, "k"), strings.HasSuffix(v, "K"):
+		mult, v = 1024, v[:len(v)-1]
+	case strings.HasSuffix(v, "M"):
+		mult, v = 1<<20, v[:len(v)-1]
+	case strings.HasSuffix(v, "G"):
+		mult, v = 1<<30, v[:len(v)-1]
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	return n * mult, err
+}
+
+// ddSize formats a byte count the way BusyBox dd does: 52B, 1.0MB.
+func ddSize(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%dB", n)
+	}
+	f, units := float64(n), "KMGT"
+	i := -1
+	for f >= 1024 && i < len(units)-1 {
+		f /= 1024
+		i++
+	}
+	return fmt.Sprintf("%.1f%cB", f, units[i])
 }

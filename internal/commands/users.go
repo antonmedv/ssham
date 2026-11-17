@@ -11,12 +11,10 @@ import (
 
 func init() {
 	register(
-		shell.Command{Name: "whoami", Run: cmdWhoami},
-		shell.Command{Name: "id", Run: cmdId},
-		shell.Command{Name: "groups", Run: cmdGroups},
-		shell.Command{Name: "useradd", Aliases: []string{"adduser", "usermod"}, Dir: "/usr/sbin", Run: cmdUseradd},
-		shell.Command{Name: "chpasswd", Dir: "/usr/sbin", Run: cmdChpasswd},
-		shell.Command{Name: "passwd", Run: cmdPasswd},
+		shell.Command{Name: "whoami", Dir: "/usr/bin", Usage: "", Run: cmdWhoami},
+		shell.Command{Name: "id", Dir: "/usr/bin", Usage: "[OPTIONS] [USER]", Run: cmdId},
+		shell.Command{Name: "passwd", Dir: "/usr/bin", Usage: "[OPTIONS] [USER]", Run: cmdPasswd},
+		shell.Command{Name: "chpasswd", Dir: "/usr/sbin", Usage: "[--md5|--encrypted|--crypt-method|--root]", Run: cmdChpasswd},
 	)
 }
 
@@ -31,7 +29,7 @@ func cmdId(e *shell.Env) int {
 	if len(o.Args) > 0 {
 		var ok bool
 		if u, ok = e.LookupUser(o.Args[0]); !ok {
-			e.Errorf("'%s': no such user", o.Args[0])
+			e.Errorf("unknown user %s", o.Args[0])
 			return 1
 		}
 	}
@@ -58,79 +56,51 @@ func cmdId(e *shell.Env) int {
 	return 0
 }
 
-func cmdGroups(e *shell.Env) int {
-	u := e.User()
-	if len(e.Args) > 1 {
-		var ok bool
-		if u, ok = e.LookupUser(e.Args[1]); !ok {
-			e.Errorf("'%s': no such user", e.Args[1])
-			return 1
+// setPassword replaces user's hash in /etc/shadow (a link to flash, so it
+// is writable). The hash only looks like md5-crypt; it is never checked.
+func setPassword(e *shell.Env, user string) error {
+	data, err := e.FS.AsRoot().ReadFile("/etc/shadow")
+	if err != nil {
+		return err
+	}
+	const chars = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	random := func(n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = chars[e.Rand().IntN(len(chars))]
 		}
-		e.Printf("%s : ", u.Name)
+		return string(b)
 	}
-	e.Printf("%s\n", strings.Join(u.Groups, " "))
-	return 0
-}
-
-func cmdUseradd(e *shell.Env) int {
-	o := e.Flags("p", "d", "s", "g", "G", "c", "u", "password", "home", "shell")
-	if !e.User().IsRoot() {
-		fmt.Fprintf(e.Stderr, "%s: Permission denied.\n%s: cannot lock /etc/passwd; try again later.\n", e.Args[0], e.Args[0])
-		return 1
-	}
-	if len(o.Args) == 0 {
-		fmt.Fprintf(e.Stderr, "Usage: %s [options] LOGIN\n", e.Args[0])
-		return 2
-	}
-	user := o.Args[len(o.Args)-1]
-	if e.Args[0] == "usermod" {
-		e.Log(audit.UserModify, "user", user, "args", strings.Join(e.Args[1:], " "))
-		return 0
-	}
-	if _, exists := e.LookupUser(user); exists {
-		fmt.Fprintf(e.Stderr, "%s: user '%s' already exists\n", e.Args[0], user)
-		return 9
-	}
-	pw, _ := o.Value("p", "password")
-	e.Log(audit.UserAdd, "user", user, "password_hash", pw, "args", strings.Join(e.Args[1:], " "))
-	uid := nextUID(e)
-	_ = e.FS.AsRoot().AppendFile("/etc/passwd", []byte(fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/sh\n", user, uid, uid, user)))
-	_ = e.FS.AsRoot().AppendFile("/etc/group", []byte(fmt.Sprintf("%s:x:%d:\n", user, uid)))
-	_ = e.FS.AsRoot().AppendFile("/etc/shadow", []byte(fmt.Sprintf("%s:%s:20044:0:99999:7:::\n", user, map[bool]string{true: "!", false: pw}[pw == ""])))
-	if e.Args[0] == "adduser" || o.Has("m", "create-home") {
-		_ = e.FS.AsRoot().Mkdir("/home/"+user, true)
-		_ = e.FS.AsRoot().Chmod("/home/"+user, 0o750)
-		_ = e.FS.AsRoot().Chown("/home/"+user, user, user)
-	}
-	if e.Args[0] == "adduser" {
-		e.Printf("info: Adding user `%s' ...\ninfo: Selecting UID/GID from range 1000 to 59999 ...\ninfo: Adding new group `%s' (%d) ...\ninfo: Adding new user `%s' (%d) with group `%s (%d)' ...\ninfo: Creating home directory `/home/%s' ...\ninfo: Copying files from `/etc/skel' ...\n", user, user, uid, user, uid, user, uid, user)
-		for i := 0; i < 2; i++ {
-			label := "New password: "
-			if i == 1 {
-				label = "Retype new password: "
-			}
-			pw, err := e.ReadLine(label, false)
-			if err != nil {
-				return 1
-			}
-			e.Log(audit.PasswordEntered, "context", "adduser", "user", user, "password", pw)
+	days := strconv.FormatInt(e.Now().Unix()/86400, 10)
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	for i, l := range lines {
+		f := strings.Split(l, ":")
+		if len(f) > 2 && f[0] == user {
+			f[1], f[2] = "$1$"+random(8)+"$"+random(22), days
+			lines[i] = strings.Join(f, ":")
 		}
-		e.Print("passwd: password updated successfully\n")
 	}
-	return 0
+	return e.FS.AsRoot().WriteFile("/etc/shadow", []byte(strings.Join(lines, "\n")+"\n"))
 }
 
 func cmdChpasswd(e *shell.Env) int {
-	data := e.ReadStdin()
-	for _, l := range splitLines(data) {
+	if !e.User().IsRoot() {
+		e.Errorf("must be run by root")
+		return 1
+	}
+	for _, l := range splitLines(e.ReadStdin()) {
 		user, pw, ok := strings.Cut(l, ":")
 		if !ok {
-			fmt.Fprintf(e.Stderr, "chpasswd: line 1: missing new password\n")
+			e.Errorf("missing new password")
 			return 1
 		}
 		e.Log(audit.PasswordChange, "method", "chpasswd", "user", user, "password", pw)
-		if !e.User().IsRoot() {
-			fmt.Fprintf(e.Stderr, "chpasswd: (user %s) pam_chauthtok() failed, error:\nAuthentication token manipulation error\nchpasswd: (line 1, user %s) password not changed\n", user, user)
+		if _, ok := e.LookupUser(user); !ok {
+			e.Errorf("unknown user %s", user)
+			return 1
+		}
+		if err := setPassword(e, user); err != nil {
+			e.Errorf("can't open '/etc/shadow': %s", err)
 			return 1
 		}
 	}
@@ -142,51 +112,30 @@ func cmdPasswd(e *shell.Env) int {
 	target := e.User().Name
 	if len(o.Args) > 0 {
 		target = o.Args[0]
-		if !e.User().IsRoot() && target != e.User().Name {
-			fmt.Fprintf(e.Stderr, "passwd: You may not view or modify password information for %s.\n", target)
-			return 1
-		}
 	}
-	if o.Has("stdin") {
-		pw := strings.TrimSpace(e.ReadStdin())
-		e.Log(audit.PasswordChange, "method", "passwd --stdin", "user", target, "password", pw)
-		e.Print("passwd: unrecognized option '--stdin'\n")
+	if _, ok := e.LookupUser(target); !ok {
+		e.Errorf("unknown user %s", target)
 		return 1
 	}
-	e.Printf("Changing password for %s.\n", target)
-	prompts := []string{"Current password: ", "New password: ", "Retype new password: "}
-	if e.User().IsRoot() {
-		prompts = prompts[1:]
+	e.Printf("Changing password for %s\n", target)
+	pw1, err := e.ReadLine("New password: ", false)
+	if err != nil {
+		return 1
 	}
-	var pws []string
-	for _, p := range prompts {
-		pw, err := e.ReadLine(p, false)
-		if err != nil {
-			fmt.Fprintln(e.Stderr, "passwd: Authentication token manipulation error\npasswd: password unchanged")
-			return 10
-		}
-		pws = append(pws, pw)
+	pw2, err := e.ReadLine("Retype password: ", false)
+	if err != nil {
+		return 1
 	}
-	e.Log(audit.PasswordChange, "method", "passwd", "user", target, "passwords", strings.Join(pws, "\x00"))
-	if pws[len(pws)-1] != pws[len(pws)-2] {
-		fmt.Fprintln(e.Stderr, "Sorry, passwords do not match.\npasswd: Authentication token manipulation error\npasswd: password unchanged")
-		return 10
+	e.Log(audit.PasswordChange, "method", "passwd", "user", target, "password", pw1, "retyped", pw2)
+	if pw1 != pw2 {
+		e.Print("Passwords don't match\n")
+		e.Errorf("password for %s is unchanged", target)
+		return 1
 	}
-	e.Print("passwd: password updated successfully\n")
+	if err := setPassword(e, target); err != nil {
+		e.Errorf("can't open '/etc/shadow': %s", err)
+		return 1
+	}
+	e.Errorf("password for %s changed by %s", target, e.User().Name)
 	return 0
-}
-
-// nextUID returns the first free uid from 1000 up, as useradd picks it.
-func nextUID(e *shell.Env) int {
-	data, _ := e.FS.AsRoot().ReadFile("/etc/passwd")
-	uid := 1000
-	for _, line := range strings.Split(string(data), "\n") {
-		f := strings.Split(line, ":")
-		if len(f) > 2 {
-			if n, err := strconv.Atoi(f[2]); err == nil && n >= uid && n < 60000 {
-				uid = n + 1
-			}
-		}
-	}
-	return uid
 }

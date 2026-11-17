@@ -1,20 +1,29 @@
 package shell
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 )
 
+var (
+	errArithSyntax = errors.New("arithmetic syntax error")
+	errDivideZero  = errors.New("divide by zero")
+)
+
 // arith evaluates a $(( )) expression with C precedence: parentheses,
 // unary - + !, * / %, + -, comparisons, == !=, && and ||. Names are shell
-// variables. Errors (bad syntax, division by zero) evaluate to 0.
-func arith(expr string, lookup func(string) string) int64 {
+// variables. The errors are ash's.
+func arith(expr string, lookup func(string) string) (int64, error) {
 	p := &arithParser{toks: arithTokens(expr), lookup: lookup}
 	v := p.binary(0)
-	if p.err || p.pos != len(p.toks) {
-		return 0
+	switch {
+	case p.err != nil:
+		return 0, p.err
+	case p.pos != len(p.toks):
+		return 0, errArithSyntax
 	}
-	return v
+	return v, nil
 }
 
 // Binary operators by precedence, lowest first.
@@ -26,7 +35,7 @@ type arithParser struct {
 	toks   []string
 	pos    int
 	lookup func(string) string
-	err    bool
+	err    error
 }
 
 func (p *arithParser) peek() string {
@@ -72,7 +81,7 @@ func (p *arithParser) apply(op string, a, b int64) int64 {
 		return a * b
 	case "/", "%":
 		if b == 0 {
-			p.err = true
+			p.err = errDivideZero
 			return 0
 		}
 		if op == "/" {
@@ -118,12 +127,12 @@ func (p *arithParser) unary() int64 {
 		p.pos++
 		v := p.binary(0)
 		if p.peek() != ")" {
-			p.err = true
+			p.err = errArithSyntax
 		}
 		p.pos++
 		return v
 	case "":
-		p.err = true
+		p.err = errArithSyntax
 		return 0
 	default:
 		p.pos++
@@ -134,7 +143,7 @@ func (p *arithParser) unary() int64 {
 			v, _ := strconv.ParseInt(strings.TrimSpace(p.lookup(tok)), 0, 64)
 			return v
 		}
-		p.err = true
+		p.err = errArithSyntax
 		return 0
 	}
 }

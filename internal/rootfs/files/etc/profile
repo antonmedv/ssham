@@ -1,0 +1,4 @@
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export LD_LIBRARY_PATH=/lib:/usr/lib
+export HOME=/root
+ulimit -s 2048

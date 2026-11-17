@@ -29,8 +29,8 @@ var Start = time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 
 // Host is the fake machine used in tests.
 var Host = rootfs.Host{
-	Hostname: "ip-10-0-2-15",
-	Kernel:   "6.8.0-48-generic",
+	Hostname: "ipcam",
+	Kernel:   "4.9.37",
 	Booted:   time.Date(2026, 10, 3, 7, 42, 0, 0, time.UTC),
 }
 

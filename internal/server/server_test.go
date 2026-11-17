@@ -40,9 +40,9 @@ func startServer(t *testing.T) (addr string, auditLog *syncBuf) {
 	srv, err := New(Config{
 		Addr:        "127.0.0.1:0",
 		HostKeyPath: filepath.Join(t.TempDir(), "hostkey"),
-		Hostname:    "ip-10-0-2-15",
-		Kernel:      "6.8.0-48-generic",
-		Version:     "OpenSSH_9.6p1 Ubuntu-3ubuntu13.5",
+		Hostname:    "ipcam",
+		Kernel:      "4.9.37",
+		Version:     "dropbear_2019.78",
 		MaxSessions: 4,
 		Audit:       audit.New(auditLog),
 	})
@@ -80,7 +80,7 @@ func dial(t *testing.T, addr, user, password string) *gossh.Client {
 func TestExecAndCredentialLogging(t *testing.T) {
 	addr, log := startServer(t)
 	c := dial(t, addr, "root", "toor123")
-	if v := string(c.ServerVersion()); v != "SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.5" {
+	if v := string(c.ServerVersion()); v != "SSH-2.0-dropbear_2019.78" {
 		t.Errorf("server version = %q", v)
 	}
 	sess, err := c.NewSession()
@@ -91,7 +91,7 @@ func TestExecAndCredentialLogging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exec: %v\n%s", err, out)
 	}
-	want := "Linux ip-10-0-2-15 6.8.0-48-generic"
+	want := "Linux ipcam 4.9.37 #1 Fri Mar 12 11:24:03 CST 2021 armv7l GNU/Linux"
 	if !strings.Contains(string(out), want) || !strings.Contains(string(out), "\nroot\nroot\n") {
 		t.Errorf("unexpected output:\n%s", out)
 	}
@@ -138,7 +138,7 @@ func TestAnyPublicKeyAcceptedAndLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := sess.CombinedOutput("whoami")
-	if err != nil || string(out) != "deploy\n" {
+	if err != nil || string(out) != "root\n" {
 		t.Errorf("whoami = %q, %v", out, err)
 	}
 	logs := log.String()
@@ -180,16 +180,16 @@ func TestInteractiveShell(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	waitFor(t, out, "Welcome to Ubuntu 24.04.1 LTS")
-	waitFor(t, out, "admin@ip-10-0-2-15:~$")
+	waitFor(t, out, "BusyBox v1.31.1 (2021-03-12 11:24:03 CST) built-in shell (ash)")
+	waitFor(t, out, "~ #")
 
 	io.WriteString(stdin, "echo $((6*7))\r")
 	waitFor(t, out, "\n42")
 
 	// Tab completion of a command name.
 	io.WriteString(stdin, "whoa\t\r")
-	waitFor(t, out, "$ whoami")
-	waitFor(t, out, "\nadmin")
+	waitFor(t, out, "# whoami")
+	waitFor(t, out, "\nroot")
 
 	// Line editing: type, move left, insert.
 	io.WriteString(stdin, "eco hi\x1b[D\x1b[D\x1b[D\x1b[Dh\r")
@@ -209,9 +209,6 @@ func TestInteractiveShell(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("session did not end after exit")
-	}
-	if !strings.Contains(ansi.Strip(out.String()), "logout") {
-		t.Errorf("no logout message:\n%s", ansi.Strip(out.String()))
 	}
 	for _, w := range []string{`"line":"echo $((6*7))"`, `"line":"whoami "`, `"msg":"session_end"`} {
 		if !strings.Contains(log.String(), w) {

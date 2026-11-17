@@ -1,6 +1,6 @@
-// Package shell implements a fake bash. It parses and runs command lines,
-// but every program is simulated in Go (see the commands package) against an
-// in-memory filesystem; nothing is ever executed on the host.
+// Package shell implements a fake BusyBox ash. It parses and runs command
+// lines, but every program is simulated in Go (see the commands package)
+// against an in-memory filesystem; nothing is ever executed on the host.
 package shell
 
 import (
@@ -77,11 +77,13 @@ type Shell struct {
 	nextPID int
 	jobs    int
 
-	sudoCached bool // sudo asked for a password already
-	depth      int  // script / command substitution nesting
-	leaving    bool // exit was called in a nested script: unwind it
-	exited     bool
-	exitCode   int
+	depth     int    // script / command substitution nesting
+	loopDepth int    // nested loops, for break and continue
+	jump      int    // pending break (> 0) or continue (< 0) levels
+	expandErr string // an error found while expanding the current command
+	leaving   bool   // exit was called in a nested script: unwind it
+	exited    bool
+	exitCode  int
 
 	mu     sync.Mutex
 	cancel context.CancelFunc // interrupts the running command
@@ -107,15 +109,12 @@ func New(cfg Config, term Terminal) *Shell {
 	}
 	cfg.FS.Now = cfg.Clock
 
-	uid := 1001
-	switch cfg.User {
-	case "root":
-		uid = 0
-	case "ubuntu":
-		uid = 1000
+	// The device only has the accounts in its /etc/passwd. Any other
+	// login name gets a root shell, as on most such devices.
+	user, ok := lookupUser(cfg.FS, cfg.User)
+	if !ok {
+		user, _ = lookupUser(cfg.FS, "root")
 	}
-	rootfs.AddUser(cfg.FS, cfg.User, uid)
-	user, _ := lookupUser(cfg.FS, cfg.User)
 
 	r := cfg.Rand
 	s := &Shell{
@@ -127,24 +126,21 @@ func New(cfg Config, term Terminal) *Shell {
 		cwd:     user.Home,
 		vars:    map[string]string{},
 		exports: map[string]bool{},
-		aliases: map[string]string{"ls": "ls --color=auto", "grep": "grep --color=auto", "ll": "ls -alF", "la": "ls -A", "l": "ls -CF"},
+		aliases: map[string]string{},
 		pid:     2000 + r.IntN(30000),
 	}
 	s.nextPID = s.pid + 1
+	// What dropbear passes to the login shell, plus what /etc/profile sets.
 	env := [][2]string{
-		{"SHELL", "/bin/bash"},
-		{"LANG", "C.UTF-8"},
 		{"USER", user.Name},
 		{"LOGNAME", user.Name},
 		{"HOME", user.Home},
+		{"SHELL", user.Shell},
+		{"PATH", "/bin:/sbin:/usr/bin:/usr/sbin"},
+		{"LD_LIBRARY_PATH", "/lib:/usr/lib"},
 		{"PWD", s.cwd},
-		{"PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin"},
-		{"SSH_CONNECTION", fmt.Sprintf("%s %d 10.0.2.15 22", cfg.ClientIP, 40000+r.IntN(20000))},
 		{"SSH_CLIENT", fmt.Sprintf("%s %d 22", cfg.ClientIP, 40000+r.IntN(20000))},
-		{"MOTD_SHOWN", "pam"},
-		{"XDG_SESSION_ID", fmt.Sprint(r.IntN(400) + 1)},
-		{"XDG_RUNTIME_DIR", fmt.Sprintf("/run/user/%d", user.UID)},
-		{"SHLVL", "1"},
+		{"SSH_CONNECTION", fmt.Sprintf("%s %d 192.168.1.108 22", cfg.ClientIP, 40000+r.IntN(20000))},
 	}
 	if cfg.Term != "" {
 		env = append(env, [2]string{"TERM", cfg.Term}, [2]string{"SSH_TTY", "/dev/pts/0"})
@@ -176,24 +172,32 @@ func (s *Shell) resolve(p string) string { return vfs.Abs(s.cwd, p) }
 func (s *Shell) now() time.Time { return s.cfg.Clock() }
 
 func (s *Shell) getVar(name string) string {
-	switch name {
-	case "RANDOM":
-		return fmt.Sprint(s.cfg.Rand.IntN(32768))
-	case "UID", "EUID":
-		return fmt.Sprint(s.user.UID)
-	case "HOSTNAME":
-		return s.cfg.Host.Hostname
-	case "BASH_VERSION":
-		return "5.2.21(1)-release"
-	case "PPID":
+	if name == "PPID" {
 		return fmt.Sprint(s.pid - 1)
-	case "SECONDS":
-		return fmt.Sprint(int(s.now().Sub(s.cfg.Started).Seconds()))
 	}
 	return s.vars[name]
 }
 
 func (s *Shell) setVar(name, val string) { s.vars[name] = val }
+
+// expandError records an error found during expansion, such as a bad
+// substitution. The command is not run; see checkExpand.
+func (s *Shell) expandError(msg string) {
+	if s.expandErr == "" {
+		s.expandErr = msg
+	}
+}
+
+// checkExpand reports a pending expansion error. It returns false if the
+// command must not run.
+func (s *Shell) checkExpand(stderr io.Writer) bool {
+	if s.expandErr == "" {
+		return true
+	}
+	fmt.Fprintf(stderr, "sh: %s\n", s.expandErr)
+	s.expandErr = ""
+	return false
+}
 
 // environ returns NAME=value pairs, sorted; exported variables only if
 // exportedOnly.

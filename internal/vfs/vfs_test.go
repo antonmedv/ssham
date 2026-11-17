@@ -288,3 +288,70 @@ func TestView(t *testing.T) {
 		t.Errorf("AsRoot: %v", err)
 	}
 }
+
+func TestReadOnlyMounts(t *testing.T) {
+	f := newTestFS()
+	f.Writable = []string{"/tmp", "/home/alice"}
+	f.Symlink("root", "/tmp/real", "/tmp/link") // writable target
+	f.Put("/etc/conf", &Node{Mode: fs.ModeSymlink | 0o777, Owner: "root", Target: "/tmp/conf"})
+
+	for _, tt := range []struct {
+		op, path string
+		want     error
+	}{
+		{"write", "/etc/passwd", ErrReadOnly}, // even root
+		{"write", "/etc/new", ErrReadOnly},
+		{"mkdir", "/usr/x", ErrReadOnly},
+		{"remove", "/etc/passwd", ErrReadOnly},
+		{"chmod", "/etc/passwd", ErrReadOnly},
+		{"touch", "/etc/passwd", ErrReadOnly},
+		{"write", "/tmp/x", nil},
+		{"write", "/home/alice/x", nil},
+		{"write", "/etc/conf", nil}, // a link from / into a writable mount
+		{"write", "/tmpfoo", ErrReadOnly},
+	} {
+		var err error
+		switch tt.op {
+		case "write":
+			err = f.WriteFile("root", tt.path, []byte("x"), false)
+		case "mkdir":
+			err = f.Mkdir("root", tt.path, false)
+		case "remove":
+			err = f.Remove("root", tt.path, false)
+		case "chmod":
+			err = f.Chmod("root", tt.path, 0o777)
+		case "touch":
+			err = f.Touch("root", tt.path)
+		}
+		if !errors.Is(err, tt.want) {
+			t.Errorf("%s %s: got %v, want %v", tt.op, tt.path, err, tt.want)
+		}
+	}
+	if data, _ := f.ReadFile("root", "/tmp/conf"); string(data) != "x" {
+		t.Error("write through link did not land in /tmp")
+	}
+	if err := f.Rename("root", "/etc/passwd", "/tmp/p"); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("move off a read-only mount: %v", err)
+	}
+	if err := f.Copy("root", "/etc/passwd", "/tmp/p", false); err != nil {
+		t.Errorf("copy off a read-only mount: %v", err)
+	}
+	if !f.Clone().IsReadOnly("/etc") || f.Clone().IsReadOnly("/tmp/p") {
+		t.Error("Clone lost the mount table")
+	}
+}
+
+func TestMountPointsAreBusy(t *testing.T) {
+	f := newTestFS()
+	f.Writable = []string{"/tmp"}
+	f.WriteFile("root", "/tmp/x", []byte("x"), false)
+	if err := f.Remove("root", "/tmp", true); !errors.Is(err, ErrBusy) {
+		t.Errorf("remove mount point: %v", err)
+	}
+	if err := f.Rename("root", "/tmp", "/tmp2"); !errors.Is(err, ErrBusy) {
+		t.Errorf("rename mount point: %v", err)
+	}
+	if err := f.Remove("root", "/tmp/x", false); err != nil {
+		t.Errorf("remove inside mount: %v", err)
+	}
+}

@@ -2,27 +2,34 @@ package shell
 
 import (
 	"fmt"
-	"hash/fnv"
+	"io/fs"
+	"path"
 	"sort"
-	"time"
+	"strings"
 
+	"github.com/antonmedv/ssham/internal/rootfs"
 	"github.com/antonmedv/ssham/internal/vfs"
 )
 
-// Command is a simulated program.
+// Command is a BusyBox applet.
 type Command struct {
-	// Name is the program name, e.g. "ls".
+	// Name is the applet name, e.g. "ls".
 	Name string
-	// Aliases are other names for the same program, e.g. "egrep" for grep.
+	// Aliases are other names for the same applet, e.g. "egrep" for grep.
 	Aliases []string
-	// Dir is where the binary is installed. Defaults to /usr/bin.
+	// Dir is where the applet's link to /bin/busybox lives: /bin (the
+	// default), /sbin, /usr/bin or /usr/sbin.
 	Dir string
-	// Run simulates the program and returns its exit status. A nil Run
-	// means the program is installed but silently does nothing.
+	// Usage is BusyBox's usage text without the applet name, e.g.
+	// "[-1AaCxdLHRFplinshrSXvctu] [FILE]...", optionally followed by a
+	// blank line and a description. It is shown for --help and by
+	// Env.Usage.
+	Usage string
+	// Run simulates the applet and returns its exit status.
 	Run func(e *Env) int
 }
 
-// Registry is the set of simulated programs.
+// Registry is the set of applets.
 type Registry struct {
 	cmds map[string]*Command
 }
@@ -30,12 +37,15 @@ type Registry struct {
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry { return &Registry{cmds: map[string]*Command{}} }
 
-// Add registers commands. It panics on an empty or duplicate name, so
-// mistakes show up as soon as the program starts.
+// Add registers applets. It panics on a mistake (empty or duplicate name,
+// no Run), so it shows up as soon as the program starts.
 func (r *Registry) Add(cmds ...Command) {
 	for _, c := range cmds {
 		if c.Dir == "" {
-			c.Dir = "/usr/bin"
+			c.Dir = "/bin"
+		}
+		if c.Run == nil {
+			panic(fmt.Sprintf("shell: command %q has no Run", c.Name))
 		}
 		for _, name := range append([]string{c.Name}, c.Aliases...) {
 			if name == "" {
@@ -65,35 +75,51 @@ func (r *Registry) Names() []string {
 	return names
 }
 
-// Install puts a stub binary for every command, and for builtins that also
-// exist as programs (echo, test, ...), into f.
-func Install(f *vfs.FS, r *Registry) {
-	put := func(dir, name string) {
-		f.Put(dir+"/"+name, &vfs.Node{
-			Mode: 0o755, Owner: "root", Group: "root", ModTime: f.Now().Add(-120 * 24 * time.Hour).Truncate(time.Minute),
-			Data:     []byte("\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00>\x00\x01\x00\x00\x00"),
-			FakeSize: fakeSize(name),
-		})
-	}
+// Applets returns every applet name BusyBox provides: the registered
+// commands plus the shell builtins that are also applets (echo, test, ...),
+// with the directory each one is linked from.
+func (r *Registry) Applets() map[string]string {
+	out := map[string]string{}
 	for name, c := range r.cmds {
-		put(c.Dir, name)
+		out[name] = c.Dir
 	}
 	for name, b := range builtins {
-		if b.binary {
-			put("/usr/bin", name)
+		if b.dir != "" {
+			out[name] = b.dir
 		}
 	}
-	// setuid binaries
-	for _, p := range []string{"/usr/bin/sudo", "/usr/bin/passwd", "/usr/bin/su"} {
-		if n, err := f.Stat("root", p); err == nil {
-			n.Mode |= 0o4000
+	return out
+}
+
+// busyboxSize is the size of the multi-call binary.
+const busyboxSize = 1007208
+
+// Install puts /bin/busybox and a link to it for every applet into f, the
+// way BusyBox's make install does.
+func Install(f *vfs.FS, r *Registry) {
+	// Same date as the rest of the firmware image.
+	mtime := f.Now()
+	if bin, err := f.Stat("root", path.Dir(busyboxPath)); err == nil {
+		mtime = bin.ModTime
+	}
+	bb := rootfs.Binary(busyboxSize)
+	bb.ModTime = mtime
+	f.Put(busyboxPath, bb)
+	for name, dir := range r.Applets() {
+		if name == "busybox" {
+			continue
 		}
+		f.Put(dir+"/"+name, &vfs.Node{Mode: fs.ModeSymlink | 0o777, Owner: "root", Group: "root", ModTime: mtime, Target: linkTarget(dir)})
 	}
 }
 
-// fakeSize gives each stub binary a stable, plausible size.
-func fakeSize(name string) int64 {
-	h := fnv.New32a()
-	h.Write([]byte(name))
-	return 35000 + int64(h.Sum32()%240000)
+// linkTarget returns the relative link to /bin/busybox from dir:
+// "busybox" in /bin, "../bin/busybox" in /sbin, "../../bin/busybox" in
+// /usr/bin.
+func linkTarget(dir string) string {
+	if dir == path.Dir(busyboxPath) {
+		return path.Base(busyboxPath)
+	}
+	depth := strings.Count(strings.Trim(dir, "/"), "/") + 1
+	return strings.Repeat("../", depth) + strings.TrimPrefix(busyboxPath, "/")
 }

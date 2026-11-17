@@ -1,0 +1,6 @@
+[admin]
+password=Cam!2021admin
+level=Administrator
+[viewer]
+password=viewer
+level=User

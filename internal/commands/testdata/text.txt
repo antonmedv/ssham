@@ -1,101 +1,71 @@
-$ seq 5
-1
-2
-3
-4
-5
-$ seq 2 2 8
-2
-4
-6
-8
-$ seq -s , 3
-1,2,3
-$ seq 10 | head -3; seq 10 | head -n 2; seq 10 | head -1
-1
-2
-3
-1
-2
-1
-$ seq 10 | tail -3; seq 10 | tail -n +9
-8
-9
-10
-9
-10
-$ wc /etc/hostname; wc -l /etc/passwd /etc/group
-  1   1  13 /etc/hostname
-26 /etc/passwd
-13 /etc/group
-39 total
-$ echo one two three | wc -w
-3
-$ printf 'b\na\nc\na\n' | sort
-a
-a
-b
-c
-$ printf 'b\na\nc\na\n' | sort -u
-a
-b
-c
-$ printf 'b\na\nc\na\n' | sort -r
-c
-b
-a
-a
-$ printf '10\n9\n100\n' | sort -n
-9
-10
-100
-$ printf 'x 3\ny 1\nz 2\n' | sort -k2 -n
-y 1
-z 2
-x 3
-$ printf 'a\na\nb\na\n' | uniq
-a
-b
-a
-$ printf 'a\na\nb\na\n' | uniq -c
-      2 a
-      1 b
+$ head -2 /etc/passwd; tail -1 /etc/passwd
+root:x:0:0:root:/root:/bin/sh
+daemon:x:1:1:daemon:/usr/sbin:/bin/false
+nobody:x:65534:65534:nobody:/home:/bin/false
+$ head -n -3 /etc/passwd
+root:x:0:0:root:/root:/bin/sh
+daemon:x:1:1:daemon:/usr/sbin:/bin/false
+$ wc -l /etc/passwd; wc /nope
+5 /etc/passwd
+wc: can't open '/nope': No such file or directory
+[exit 1]
+$ printf 'b\na\nb\n' | sort | uniq -c
       1 a
-$ head -2 /etc/passwd | cut -d: -f1,7
-root:/bin/bash
-daemon:/usr/sbin/nologin
-$ echo hello | cut -c2-4
-ell
-$ echo hello | tr a-z A-Z; echo hello | tr -d l; echo 'a   b' | tr -s ' '
+      2 b
+$ cut -d: -f1,7 /etc/passwd | head -2
+root:/bin/sh
+daemon:/bin/false
+$ echo hello | tr a-z A-Z
 HELLO
-heo
-a b
-$ echo hello | tee /tmp/t1 /tmp/t2; cat /tmp/t1 /tmp/t2
-hello
-hello
-hello
-$ echo more | tee -a /tmp/t1 >/dev/null; cat /tmp/t1
-hello
-more
-$ echo -n hello | base64; echo aGVsbG8= | base64 -d
-aGVsbG8=
-hello
-[no newline]
-$ echo -n hello | md5sum; echo -n hello | sha256sum; md5sum /etc/hostname
+$ echo hi | tee /tmp/t1; cat /tmp/t1
+hi
+hi
+$ echo -n hello | md5sum; md5sum /etc/hostname /nope
 5d41402abc4b2a76b9719d911017c592  -
-2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  -
-d8b1c17cc6007583fd93c36c42aba9f9  /etc/hostname
-$ yes | head -3
-y
-y
-y
-$ echo abc | rev
-cba
-$ seq 5 | head -n -2
-1
-2
-3
-$ seq 5 | head -n -9
-$ seq 5 | tail -n -2
-4
+0e5664c3209e85ac317ea7237b62e248  /etc/hostname
+md5sum: can't open '/nope': No such file or directory
+[exit 1]
+$ grep root /etc/passwd; grep -c : /etc/passwd
+root:x:0:0:root:/root:/bin/sh
 5
+$ grep -r password= /mnt/mtd
+/mnt/mtd/Config/Account:password=Cam!2021admin
+/mnt/mtd/Config/Account:password=viewer
+$ grep -l password /mnt/mtd/Config/*
+/mnt/mtd/Config/Account
+$ grep x /nope
+grep: /nope: No such file or directory
+[exit 2]
+$ cat /proc/cpuinfo | grep -c processor
+1
+$ grep 'model name' /proc/cpuinfo
+model name	: ARMv7 Processor rev 5 (v7l)
+$ awk -F: '{print $1}' /etc/passwd | head -2
+root
+daemon
+$ free | awk '/Mem/ {print $2}'
+59060
+$ echo hello | sed 's/l/L/g'
+heLLo
+$ sed -n 1p /etc/passwd
+root:x:0:0:root:/root:/bin/sh
+$ sed s/a/b/ /nope
+sed: can't open '/nope': No such file or directory
+[exit 2]
+$ find /mnt -name '*.conf'
+/mnt/mtd/Config/network.conf
+$ find /nope
+find: /nope: No such file or directory
+[exit 1]
+$ echo a b | xargs echo items:
+items: a b
+$ env | grep PATH
+LD_LIBRARY_PATH=/lib:/usr/lib
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+$ env FOO=1 sh -c 'echo $FOO'
+1
+$ sleep 2 && echo slept
+slept
+$ sleep x
+sleep: invalid number 'x'
+[exit 1]

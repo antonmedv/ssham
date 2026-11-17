@@ -1,7 +1,5 @@
 package shell
 
-import "fmt"
-
 // identity is a saved user and working directory, restored when a nested
 // shell (su, sudo -i, bash) exits.
 type identity struct {
@@ -34,13 +32,4 @@ func (s *Shell) setIdentity(id identity) {
 		s.cwd = id.cwd
 	}
 	s.vars["USER"], s.vars["LOGNAME"], s.vars["HOME"], s.vars["PWD"] = s.user.Name, s.user.Name, s.user.Home, s.cwd
-	s.vars["SHLVL"] = fmt.Sprint(len(s.stack) + 1)
-}
-
-// runAs runs fn as user, then restores the current user and directory.
-func (s *Shell) runAs(user User, fn func() int) int {
-	saved := identity{s.user, s.cwd}
-	s.user = user
-	defer func() { s.user, s.cwd = saved.user, saved.cwd }()
-	return fn()
 }

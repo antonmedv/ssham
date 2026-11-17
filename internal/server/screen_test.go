@@ -1,6 +1,7 @@
 package server
 
 import (
+	"github.com/charmbracelet/x/ansi"
 	"io"
 	"strings"
 	"testing"
@@ -31,8 +32,6 @@ func newScreenSession(t *testing.T, user string, w, h int) *screenSession {
 	if err := sess.RequestPty("xterm-256color", h, w, gossh.TerminalModes{}); err != nil {
 		t.Fatal(err)
 	}
-	// The emulator is sized so the session never scrolls: vt's scrollback
-	// path is not safe for concurrent reads.
 	ew := w
 	if ew <= 0 {
 		ew = 80
@@ -53,7 +52,8 @@ func newScreenSession(t *testing.T, user string, w, h int) *screenSession {
 }
 
 func (s *screenSession) screen() string {
-	lines := strings.Split(s.emu.String(), "\n")
+	// Render, not String: SafeEmulator only locks Render.
+	lines := strings.Split(ansi.Strip(s.emu.Render()), "\n")
 	for i, l := range lines {
 		lines[i] = strings.TrimRight(l, " ")
 	}
@@ -76,13 +76,13 @@ func (s *screenSession) send(keys string) { _, _ = io.WriteString(s.stdin, keys)
 
 func TestScreenRendering(t *testing.T) {
 	s := newScreenSession(t, "admin", 80, 60)
-	s.waitScreen("admin@ip-10-0-2-15:~$")
+	s.waitScreen("~ #")
 	s.send("echo one\r")
-	s.waitScreen("one\nadmin@ip-10-0-2-15:~$")
+	s.waitScreen("one\n~ #")
 	s.send("printf 'a\\tb\\n'; echo -n partial\r")
-	s.waitScreen("partialadmin@ip-10-0-2-15:~$")
+	s.waitScreen("partial~ #")
 	t.Logf("screen:\n%s", s.screen())
-	want := "admin@ip-10-0-2-15:~$ echo one\none\nadmin@ip-10-0-2-15:~$ printf 'a\\tb\\n'; echo -n partial\na       b\npartialadmin@ip-10-0-2-15:~$"
+	want := "BusyBox v1.31.1 (2021-03-12 11:24:03 CST) built-in shell (ash)\n\n~ # echo one\none\n~ # printf 'a\\tb\\n'; echo -n partial\na       b\npartial~ #"
 	if !strings.Contains(s.screen(), want) {
 		t.Errorf("screen mismatch; want contiguous block:\n%s\n--- got ---\n%s", want, s.screen())
 	}
@@ -90,21 +90,25 @@ func TestScreenRendering(t *testing.T) {
 
 func TestScreenLineEditing(t *testing.T) {
 	s := newScreenSession(t, "admin", 60, 40)
-	prompt := "admin@ip-10-0-2-15:~$"
+	prompt := "~ #"
 	s.waitScreen(prompt)
 
-	// sudo password is hidden, then the command runs as root.
-	s.send("sudo whoami\r")
-	s.waitScreen("[sudo] password for admin:")
+	// Passwords are hidden.
+	s.send("passwd\r")
+	s.waitScreen("New password:")
 	s.send("s3cret\r")
-	s.waitScreen("[sudo] password for admin:\nroot\n" + prompt)
+	s.waitScreen("Retype password:")
+	s.send("s3cret\r")
+	s.waitScreen("passwd: password for root changed by root\n" + prompt)
 	if strings.Contains(s.screen(), "s3cret") {
 		t.Errorf("password was echoed:\n%s", s.screen())
 	}
 
 	// History recall with the up arrow.
-	s.send("\x1b[A\x1b[A\r")
-	s.waitScreen("root\n" + prompt + " sudo whoami\nroot\n" + prompt)
+	s.send("whoami\r")
+	s.waitScreen("root\n" + prompt)
+	s.send("\x1b[A\x1b[A\x1b[B\r")
+	s.waitScreen("root\n" + prompt + " whoami\nroot\n" + prompt)
 
 	// Ctrl+C at the prompt abandons the line.
 	s.send("abandoned\x03")
@@ -153,9 +157,9 @@ func TestScreenLineEditing(t *testing.T) {
 
 func TestNoFingerprintSequencesAndIdleIsQuiet(t *testing.T) {
 	s := newScreenSession(t, "root", 80, 50)
-	s.waitScreen("root@ip-10-0-2-15:~#")
+	s.waitScreen("~ #")
 	s.send("echo hi\r")
-	s.waitScreen("hi\nroot@ip-10-0-2-15:~#")
+	s.waitScreen("hi\n~ #")
 
 	before := len(s.raw.String())
 	time.Sleep(500 * time.Millisecond)
@@ -173,7 +177,7 @@ func TestNoFingerprintSequencesAndIdleIsQuiet(t *testing.T) {
 func TestZeroSizePty(t *testing.T) {
 	s := newScreenSession(t, "root", 0, 0)
 	before := time.Now()
-	for time.Since(before) < 2*time.Second && !strings.Contains(s.raw.String(), "root@ip-10-0-2-15") {
+	for time.Since(before) < 2*time.Second && !strings.Contains(s.raw.String(), "~ #") {
 		time.Sleep(20 * time.Millisecond)
 	}
 	n := len(s.raw.String())

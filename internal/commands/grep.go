@@ -11,7 +11,7 @@ import (
 
 func init() {
 	register(
-		shell.Command{Name: "grep", Aliases: []string{"egrep", "fgrep"}, Run: cmdGrep},
+		shell.Command{Name: "grep", Aliases: []string{"egrep", "fgrep"}, Usage: "[-HhnlLoqvsriwFE] [-m N] [-A/B/C N] PATTERN/-e PATTERN... [FILE]...", Run: cmdGrep},
 	)
 }
 
@@ -24,8 +24,7 @@ func cmdGrep(e *shell.Env) int {
 	files := o.Args
 	if len(pats) == 0 {
 		if len(files) == 0 {
-			fmt.Fprintln(e.Stderr, "Usage: grep [OPTION]... PATTERNS [FILE]...\nTry 'grep --help' for more information.")
-			return 2
+			return e.Usage()
 		}
 		pats = append(pats, strings.Split(files[0], "\n")...)
 		files = files[1:]
@@ -54,7 +53,7 @@ func cmdGrep(e *shell.Env) int {
 	}
 	re, err := regexp.Compile(expr)
 	if err != nil {
-		fmt.Fprintf(e.Stderr, "grep: Invalid regular expression\n")
+		fmt.Fprintf(e.Stderr, "grep: bad regex '%s'\n", expr)
 		return 2
 	}
 	invert := o.Has("v", "invert-match")

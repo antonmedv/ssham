@@ -2,11 +2,6 @@ package commands
 
 import (
 	"crypto/md5"
-	"crypto/sha1"
-	"crypto/sha256"
-	"encoding/base64"
-	"fmt"
-	"hash"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,25 +11,25 @@ import (
 
 func init() {
 	register(
-		shell.Command{Name: "head", Run: cmdHead},
-		shell.Command{Name: "tail", Run: cmdTail},
-		shell.Command{Name: "wc", Run: cmdWc},
-		shell.Command{Name: "sort", Run: cmdSort},
-		shell.Command{Name: "uniq", Run: cmdUniq},
-		shell.Command{Name: "cut", Run: cmdCut},
-		shell.Command{Name: "tr", Run: cmdTr},
-		shell.Command{Name: "tee", Run: cmdTee},
-		shell.Command{Name: "base64", Run: cmdBase64},
-		shell.Command{Name: "md5sum", Aliases: []string{"sha1sum", "sha256sum"}, Run: cmdHashsum},
-		shell.Command{Name: "seq", Run: cmdSeq},
-		shell.Command{Name: "yes", Run: cmdYes},
-		shell.Command{Name: "rev", Run: cmdRev},
+		shell.Command{Name: "head", Dir: "/usr/bin", Usage: "[OPTIONS] [FILE]...", Run: cmdHead},
+		shell.Command{Name: "tail", Dir: "/usr/bin", Usage: "[OPTIONS] [FILE]...", Run: cmdTail},
+		shell.Command{Name: "wc", Dir: "/usr/bin", Usage: "[-clwL] [FILE]...", Run: cmdWc},
+		shell.Command{Name: "sort", Dir: "/usr/bin", Usage: "[-nrugMcszbdfiokt] [-o FILE] [-k start[.offset][opts][,end[.offset][opts]] [-t CHAR] [FILE]...", Run: cmdSort},
+		shell.Command{Name: "uniq", Dir: "/usr/bin", Usage: "[-cdu][-f,s,w N] [INPUT [OUTPUT]]", Run: cmdUniq},
+		shell.Command{Name: "cut", Dir: "/usr/bin", Usage: "[OPTIONS] [FILE]...", Run: cmdCut},
+		shell.Command{Name: "tr", Dir: "/usr/bin", Usage: "[-cds] STRING1 [STRING2]", Run: cmdTr},
+		shell.Command{Name: "tee", Dir: "/usr/bin", Usage: "[-ai] [FILE]...", Run: cmdTee},
+		shell.Command{Name: "md5sum", Dir: "/usr/bin", Usage: "[-c[sw]] [FILE]...", Run: cmdHashsum},
 	)
 }
 
 func cmdHead(e *shell.Env) int {
-	n, _, files := countArg(e.Args[1:])
+	n, _, bytes, files := countArg(e.Args[1:])
 	data, status := e.ReadFiles(files)
+	if bytes {
+		e.Print(data[:max(0, min(len(data), n))])
+		return status
+	}
 	lines := splitLines(data)
 	switch {
 	case n < 0: // head -n -N: all but the last N lines
@@ -49,9 +44,17 @@ func cmdHead(e *shell.Env) int {
 }
 
 func cmdTail(e *shell.Env) int {
-	n, from, files := countArg(e.Args[1:])
+	n, from, bytes, files := countArg(e.Args[1:])
 	n = max(n, -n) // tail -n -N is the same as tail -n N
 	data, status := e.ReadFiles(files)
+	if bytes {
+		start := len(data) - n
+		if from {
+			start = n - 1
+		}
+		e.Print(data[min(len(data), max(0, start)):])
+		return status
+	}
 	lines := splitLines(data)
 	switch {
 	case from:
@@ -70,24 +73,25 @@ func cmdTail(e *shell.Env) int {
 }
 
 // countArg handles head/tail's -n N, -N and -n +N forms.
-func countArg(args []string) (n int, from bool, rest []string) {
+// countArg handles head/tail's -n N, -N, -n +N and -c N (bytes).
+func countArg(args []string) (n int, from, bytes bool, rest []string) {
 	n = 10
+	set := func(v string) {
+		from = strings.HasPrefix(v, "+")
+		n, _ = strconv.Atoi(strings.TrimPrefix(v, "+"))
+	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "-n" || a == "-c" || a == "--lines":
+		case a == "-n" || a == "-c":
+			bytes = a == "-c"
 			if i+1 < len(args) {
 				i++
-				v := args[i]
-				from = strings.HasPrefix(v, "+")
-				n, _ = strconv.Atoi(strings.TrimPrefix(v, "+"))
+				set(args[i])
 			}
-		case strings.HasPrefix(a, "-n"):
-			v := a[2:]
-			from = strings.HasPrefix(v, "+")
-			n, _ = strconv.Atoi(strings.TrimPrefix(v, "+"))
-		case strings.HasPrefix(a, "--lines="):
-			n, _ = strconv.Atoi(a[8:])
+		case strings.HasPrefix(a, "-n") || strings.HasPrefix(a, "-c"):
+			bytes = a[1] == 'c'
+			set(a[2:])
 		case len(a) > 1 && a[0] == '-' && a[1] >= '0' && a[1] <= '9':
 			n, _ = strconv.Atoi(a[1:])
 		case strings.HasPrefix(a, "-") && a != "-":
@@ -96,7 +100,7 @@ func countArg(args []string) (n int, from bool, rest []string) {
 			rest = append(rest, a)
 		}
 	}
-	return n, from, rest
+	return n, from, bytes, rest
 }
 
 func cmdWc(e *shell.Env) int {
@@ -135,7 +139,7 @@ func cmdWc(e *shell.Env) int {
 	for _, f := range o.Args {
 		data, err := e.FS.ReadFile(f)
 		if err != nil {
-			e.Errorf("%s: %s", f, err)
+			e.Errorf("can't open '%s': %s", f, err)
 			status = 1
 			continue
 		}
@@ -265,8 +269,7 @@ func cmdCut(e *shell.Env) int {
 		}
 		return status
 	}
-	fmt.Fprintln(e.Stderr, "cut: you must specify a list of bytes, characters, or fields\nTry 'cut --help' for more information.")
-	return 1
+	return e.Usage()
 }
 
 // parseRanges parses cut-style field lists like 1,3-5,7-.
@@ -299,8 +302,7 @@ func parseRanges(spec string) func(int) bool {
 func cmdTr(e *shell.Env) int {
 	o := e.Flags()
 	if len(o.Args) == 0 {
-		fmt.Fprintln(e.Stderr, "tr: missing operand\nTry 'tr --help' for more information.")
-		return 1
+		return e.Usage()
 	}
 	set1 := expandSet(o.Args[0])
 	in := map[rune]bool{}
@@ -332,8 +334,7 @@ func cmdTr(e *shell.Env) int {
 		return 0
 	}
 	if len(o.Args) < 2 {
-		fmt.Fprintf(e.Stderr, "tr: missing operand after '%s'\n", o.Args[0])
-		return 1
+		return e.Usage()
 	}
 	set2 := expandSet(o.Args[1])
 	m := map[rune]rune{}
@@ -389,48 +390,15 @@ func cmdTee(e *shell.Env) int {
 			write = e.FS.AppendFile
 		}
 		if err := write(f, []byte(data)); err != nil {
-			e.Errorf("%s: %s", f, err)
+			e.Errorf("can't open '%s': %s", f, err)
 			status = 1
 		}
 	}
 	return status
 }
 
-func cmdBase64(e *shell.Env) int {
-	o := e.Flags("w")
-	data, status := e.ReadFiles(o.Args)
-	if o.Has("d", "decode") {
-		clean := strings.Join(strings.Fields(data), "")
-		dec, err := base64.StdEncoding.DecodeString(clean)
-		if err != nil {
-			dec, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(clean, "="))
-		}
-		e.Print(string(dec))
-		if err != nil {
-			fmt.Fprintln(e.Stderr, "base64: invalid input")
-			return 1
-		}
-		return status
-	}
-	enc := base64.StdEncoding.EncodeToString([]byte(data))
-	for len(enc) > 76 {
-		e.Printf("%s\n", enc[:76])
-		enc = enc[76:]
-	}
-	e.Printf("%s\n", enc)
-	return status
-}
-
 func cmdHashsum(e *shell.Env) int {
-	var h func() hash.Hash
-	switch e.Args[0] {
-	case "md5sum":
-		h = md5.New
-	case "sha1sum":
-		h = sha1.New
-	default:
-		h = sha256.New
-	}
+	h := md5.New
 	o := e.Flags()
 	if len(o.Args) == 0 {
 		sum := h()
@@ -442,87 +410,13 @@ func cmdHashsum(e *shell.Env) int {
 	for _, f := range o.Args {
 		data, err := e.FS.ReadFile(f)
 		if err != nil {
-			e.Errorf("%s: %s", f, err)
+			e.Errorf("can't open '%s': %s", f, err)
 			status = 1
 			continue
 		}
 		sum := h()
 		sum.Write(data)
 		e.Printf("%x  %s\n", sum.Sum(nil), f)
-	}
-	return status
-}
-
-func cmdSeq(e *shell.Env) int {
-	o := e.Flags("s")
-	nums := make([]int, 0, 3)
-	for _, a := range o.Args {
-		n, err := strconv.Atoi(a)
-		if err != nil {
-			e.Errorf("invalid floating point argument: '%s'", a)
-			return 1
-		}
-		nums = append(nums, n)
-	}
-	first, step, last := 1, 1, 0
-	switch len(nums) {
-	case 1:
-		last = nums[0]
-	case 2:
-		first, last = nums[0], nums[1]
-	case 3:
-		first, step, last = nums[0], nums[1], nums[2]
-	default:
-		fmt.Fprintln(e.Stderr, "seq: missing operand")
-		return 1
-	}
-	sep, ok := o.Value("s")
-	if !ok {
-		sep = "\n"
-	}
-	var out []string
-	for i := first; (step > 0 && i <= last) || (step < 0 && i >= last); i += step {
-		out = append(out, strconv.Itoa(i))
-		if len(out) > 100000 || step == 0 {
-			break
-		}
-	}
-	if len(out) > 0 {
-		e.Printf("%s\n", strings.Join(out, sep))
-	}
-	return 0
-}
-
-func cmdYes(e *shell.Env) int {
-	word := "y"
-	if len(e.Args) > 1 {
-		word = strings.Join(e.Args[1:], " ")
-	}
-	// Bounded so `yes` without a pipe cannot spin forever.
-	line := word + "\n"
-	for i := 0; i < 2000; i++ {
-		if e.Ctx.Err() != nil {
-			return 130
-		}
-		e.Print(line)
-	}
-	if e.IsTTY() {
-		for e.Sleep(50 * 1e6) {
-			e.Print(strings.Repeat(line, 50))
-		}
-		return 130
-	}
-	return 0
-}
-
-func cmdRev(e *shell.Env) int {
-	data, status := e.ReadFiles(e.Args[1:])
-	for _, l := range splitLines(data) {
-		r := []rune(l)
-		for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {
-			r[i], r[j] = r[j], r[i]
-		}
-		e.Printf("%s\n", string(r))
 	}
 	return status
 }

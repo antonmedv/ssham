@@ -1,66 +1,84 @@
-// Lists: ; && || and exit status.
+// Lists and pipes.
 $ true && echo yes; false && echo no
 yes
 [exit 1]
 $ false || echo fallback
 fallback
-$ true || echo skipped
-$ false; true && echo ran
-ran
-$ echo a; echo b ; echo c
-a
-b
-c
-$ bash -c "exit 3"; echo $?
-3
-
-// Pipes.
+$ ! false && echo negated
+negated
 $ echo c b a | tr ' ' '\n' | sort
 a
 b
 c
-$ cat /etc/passwd | grep root | cut -d: -f1
-root
-$ nosuchcmd | wc -l
-nosuchcmd: command not found
+$ nosuch | wc -l
+sh: nosuch: not found
 0
-$ nosuchcmd 2>&1 | wc -l
+$ nosuch 2>&1 | wc -l
 1
-
-// Groups and background jobs.
-$ (echo a; echo b) | sort -r
-b
-a
 $ (cd /tmp; pwd); pwd
 /tmp
 /root
+$ { echo a; echo b; } | sort -r
+b
+a
 $ sleep 1 &
-[1] 25084
-$ echo ok &
-[2] 25085
-ok
+[1] 25088
+
+// if, while, until, for.
+$ if [ -d /tmp ]; then echo dir; elif true; then echo no; else echo no; fi
+dir
+$ if false; then echo no; else echo else; fi
+else
+$ for d in /tmp /var /mnt; do echo $d; done
+/tmp
+/var
+/mnt
+$ for i in 1 2 3; do if [ $i = 2 ]; then continue; fi; echo $i; done
+1
+3
+$ i=0; while [ $i -lt 3 ]; do i=$((i+1)); echo $i; done
+1
+2
+3
+$ i=0; until [ $i -ge 2 ]; do i=$((i+1)); done; echo $i
+2
+$ for i in 1 2 3; do for j in a b; do [ $j = b ] && break 2; echo $i$j; done; done
+1a
+$ while true; do :; done
+[exit 130]
+$ cd /tmp || cd /var/run || cd /mnt || cd /root || cd /; pwd
+/tmp
 
 // Syntax errors.
 $ | foo
--bash: syntax error near unexpected token `|'
+sh: syntax error: unexpected "|"
 [exit 2]
 $ echo a;; echo b
--bash: syntax error near unexpected token `;'
+sh: syntax error: unexpected ";;"
 [exit 2]
 $ echo (
--bash: syntax error near unexpected token `('
+sh: syntax error: unexpected "("
 [exit 2]
 $ echo ok &&
--bash: syntax error near unexpected token `newline'
+sh: syntax error: unexpected end of file
 [exit 2]
-$ if true; then echo yes; fi
-if: command not found
-then: command not found
-fi: command not found
-[exit 127]
+$ if true; then echo
+sh: syntax error: unexpected end of file (expecting "fi")
+[exit 2]
+$ for x in a b; echo $x; done
+sh: syntax error: unexpected "echo" (expecting "do")
+[exit 2]
+$ then
+sh: syntax error: unexpected "then"
+[exit 2]
+$ fi
+sh: syntax error: unexpected "fi"
+[exit 2]
 
-// exit ends the session: nothing runs after it.
-$ exit 3
-[exit 3]
+// exit ends the session.
+$ sh -c 'exit 3'; echo $?
+3
+$ exit 4
+[exit 4]
 $ echo unreachable
-[exit 3]
+[exit 4]

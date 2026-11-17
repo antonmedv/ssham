@@ -12,7 +12,7 @@ import (
 
 func init() {
 	register(
-		shell.Command{Name: "sed", Run: cmdSed},
+		shell.Command{Name: "sed", Usage: "[-i[SFX]] [-nrE] [-f FILE]... [-e CMD]... [FILE]...", Run: cmdSed},
 	)
 }
 
@@ -27,8 +27,7 @@ func cmdSed(e *shell.Env) int {
 	files := o.Args
 	if len(scripts) == 0 {
 		if len(files) == 0 {
-			fmt.Fprintln(e.Stderr, "Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...")
-			return 1
+			return e.Usage()
 		}
 		scripts = append(scripts, files[0])
 		files = files[1:]
@@ -67,13 +66,13 @@ func cmdSed(e *shell.Env) int {
 			p := e.FS.Abs(f)
 			data, err := e.FS.ReadFile(p)
 			if err != nil {
-				e.Errorf("can't read %s: %s", f, err)
+				e.Errorf("can't open '%s': %s", f, err)
 				status = 2
 				continue
 			}
 			res, err := apply(string(data))
 			if err != nil {
-				e.Errorf("-e expression #1, char 1: %s", err)
+				e.Errorf("%s", err)
 				return 1
 			}
 			if err := e.FS.WriteFile(p, []byte(res)); err != nil {
@@ -88,7 +87,7 @@ func cmdSed(e *shell.Env) int {
 	for _, f := range files {
 		data, err := e.FS.ReadFile(f)
 		if err != nil {
-			e.Errorf("can't read %s: %s", f, err)
+			e.Errorf("can't open '%s': %s", f, err)
 			status = 2
 			continue
 		}
@@ -99,7 +98,7 @@ func cmdSed(e *shell.Env) int {
 	}
 	res, err := apply(b.String())
 	if err != nil {
-		e.Errorf("-e expression #1, char 1: %s", err)
+		e.Errorf("%s", err)
 		return 1
 	}
 	e.Print(res)
@@ -214,5 +213,5 @@ func sedApply(cmd string, lines []string, quiet bool, printed *strings.Builder) 
 		}
 		return out, nil
 	}
-	return nil, fmt.Errorf("unknown command: `%c'", cmd[0])
+	return nil, fmt.Errorf("unsupported command %c", cmd[0])
 }

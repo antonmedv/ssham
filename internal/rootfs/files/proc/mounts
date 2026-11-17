@@ -1,5 +1,9 @@
-/dev/sda1 / ext4 rw,relatime,discard,errors=remount-ro,commit=30 0 0
-proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
-sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
-tmpfs /run tmpfs rw,nosuid,nodev,noexec,relatime,size=400460k,mode=755 0 0
-/dev/sda15 /boot/efi vfat rw,relatime,fmask=0077,dmask=0077 0 0
+rootfs / rootfs rw 0 0
+/dev/root / squashfs ro,relatime 0 0
+proc /proc proc rw,relatime 0 0
+sysfs /sys sysfs rw,relatime 0 0
+tmpfs /dev tmpfs rw,relatime,size=29528k,mode=755 0 0
+tmpfs /tmp tmpfs rw,relatime,size=29528k 0 0
+tmpfs /var tmpfs rw,relatime,size=29528k 0 0
+devpts /dev/pts devpts rw,relatime,mode=600,ptmxmode=000 0 0
+/dev/mtdblock4 /mnt/mtd jffs2 rw,relatime 0 0

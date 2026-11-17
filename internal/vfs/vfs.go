@@ -24,6 +24,8 @@ var (
 	ErrNoSpace    = errors.New("No space left on device")
 	ErrLoop       = errors.New("Too many levels of symbolic links")
 	ErrInvalid    = errors.New("Invalid argument")
+	ErrReadOnly   = errors.New("Read-only file system")
+	ErrBusy       = errors.New("Device or resource busy")
 )
 
 // Default per-session quotas. They stop an attacker from exhausting the
@@ -89,6 +91,10 @@ type FS struct {
 	MaxBytes int64
 	MaxNodes int
 	Now      func() time.Time
+	// Writable lists the mount points that can be changed. Everything
+	// else is read-only, like an embedded device's squashfs root. Nil
+	// means everything is writable.
+	Writable []string
 }
 
 // New returns an empty filesystem containing only "/".
@@ -107,7 +113,7 @@ func New() *FS {
 func (f *FS) Clone() *FS {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	return &FS{root: f.root.clone(), bytes: f.bytes, nodes: f.nodes, MaxBytes: f.MaxBytes, MaxNodes: f.MaxNodes, Now: f.Now}
+	return &FS{root: f.root.clone(), bytes: f.bytes, nodes: f.nodes, MaxBytes: f.MaxBytes, MaxNodes: f.MaxNodes, Now: f.Now, Writable: f.Writable}
 }
 
 // Abs resolves p against cwd and cleans it, without touching the tree.
@@ -245,6 +251,40 @@ func (f *FS) ReadDir(user, p string) ([]*Node, error) {
 	return out, nil
 }
 
+// readOnly reports whether the canonical path p is on a read-only mount.
+func (f *FS) readOnly(p string) bool {
+	if f.Writable == nil {
+		return false
+	}
+	for _, w := range f.Writable {
+		if p == w || strings.HasPrefix(p, strings.TrimSuffix(w, "/")+"/") {
+			return false
+		}
+	}
+	return true
+}
+
+// isMountPoint reports whether the canonical path p is a writable mount's
+// root, which cannot be removed or renamed.
+func (f *FS) isMountPoint(p string) bool {
+	for _, w := range f.Writable {
+		if p == w {
+			return true
+		}
+	}
+	return false
+}
+
+// IsReadOnly reports whether p is on a read-only mount.
+func (f *FS) IsReadOnly(p string) bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if _, cp, err := f.resolve(p, "", true, 0); err == nil {
+		p = cp
+	}
+	return f.readOnly(p)
+}
+
 // parentFor resolves the directory that will contain p and checks that
 // user may write to it.
 func (f *FS) parentFor(user, p string) (*Node, string, error) {
@@ -253,7 +293,7 @@ func (f *FS) parentFor(user, p string) (*Node, string, error) {
 		return nil, "", ErrExist
 	}
 	dir, name := path.Split(p)
-	parent, _, err := f.resolve(dir, user, true, 0)
+	parent, dirPath, err := f.resolve(dir, user, true, 0)
 	if err != nil {
 		return nil, "", err
 	}
@@ -262,6 +302,9 @@ func (f *FS) parentFor(user, p string) (*Node, string, error) {
 	}
 	if !canAccess(parent, user, 3) {
 		return nil, "", ErrPermission
+	}
+	if f.readOnly(path.Join(dirPath, name)) {
+		return nil, "", ErrReadOnly
 	}
 	return parent, name, nil
 }
@@ -287,12 +330,15 @@ func (f *FS) WriteFile(user, p string, data []byte, appendMode bool) error {
 	if p == "/dev/null" {
 		return nil
 	}
-	if n, _, err := f.resolve(p, user, true, 0); err == nil {
+	if n, cp, err := f.resolve(p, user, true, 0); err == nil {
 		if n.IsDir() {
 			return ErrIsDir
 		}
 		if !canAccess(n, user, 2) {
 			return ErrPermission
+		}
+		if f.readOnly(cp) {
+			return ErrReadOnly
 		}
 		newData := data
 		if appendMode {
@@ -403,7 +449,7 @@ func countTree(n *Node) (nodes int, bytes int64) {
 func (f *FS) Remove(user, p string, recursive bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n, _, err := f.resolve(p, user, false, 0)
+	n, cp, err := f.resolve(p, user, false, 0)
 	if err != nil {
 		return err
 	}
@@ -412,6 +458,9 @@ func (f *FS) Remove(user, p string, recursive bool) error {
 	}
 	if n.IsDir() && !recursive {
 		return ErrIsDir
+	}
+	if f.isMountPoint(cp) {
+		return ErrBusy
 	}
 	parent, name, err := f.parentFor(user, p)
 	if err != nil {
@@ -447,9 +496,12 @@ func (f *FS) Rmdir(user, p string) error {
 func (f *FS) Rename(user, src, dst string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n, _, err := f.resolve(src, user, false, 0)
+	n, cp, err := f.resolve(src, user, false, 0)
 	if err != nil {
 		return err
+	}
+	if f.isMountPoint(cp) {
+		return ErrBusy
 	}
 	if d, _, err := f.resolve(dst, user, true, 0); err == nil && d.IsDir() {
 		dst = path.Join(dst, n.Name)
@@ -494,9 +546,12 @@ func (f *FS) Copy(user, src, dst string, recursive bool) error {
 	if d, _, err := f.resolve(dst, user, true, 0); err == nil && d.IsDir() {
 		dst = path.Join(dst, n.Name)
 	}
-	if d, _, err := f.resolve(dst, user, true, 0); err == nil && !d.IsDir() && !n.IsDir() {
+	if d, dp, err := f.resolve(dst, user, true, 0); err == nil && !d.IsDir() && !n.IsDir() {
 		if !canAccess(d, user, 2) {
 			return ErrPermission
+		}
+		if f.readOnly(dp) {
+			return ErrReadOnly
 		}
 		delta := int64(len(n.Data) - len(d.Data))
 		if f.bytes+delta > f.MaxBytes {
@@ -530,12 +585,15 @@ func (f *FS) Copy(user, src, dst string, recursive bool) error {
 func (f *FS) Chmod(user, p string, mode fs.FileMode) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n, _, err := f.resolve(p, user, true, 0)
+	n, cp, err := f.resolve(p, user, true, 0)
 	if err != nil {
 		return err
 	}
 	if user != "root" && n.Owner != user {
 		return errors.New("Operation not permitted")
+	}
+	if f.readOnly(cp) {
+		return ErrReadOnly
 	}
 	n.Mode = (n.Mode &^ 0o7777) | (mode & 0o7777)
 	return nil
@@ -545,12 +603,15 @@ func (f *FS) Chmod(user, p string, mode fs.FileMode) error {
 func (f *FS) Chown(user, p, owner, group string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	n, _, err := f.resolve(p, user, true, 0)
+	n, cp, err := f.resolve(p, user, true, 0)
 	if err != nil {
 		return err
 	}
 	if user != "root" {
 		return errors.New("Operation not permitted")
+	}
+	if f.readOnly(cp) {
+		return ErrReadOnly
 	}
 	if owner != "" {
 		n.Owner = owner
@@ -564,11 +625,14 @@ func (f *FS) Chown(user, p, owner, group string) error {
 // Touch updates the modification time of p, creating it if needed.
 func (f *FS) Touch(user, p string) error {
 	f.mu.Lock()
-	n, _, err := f.resolve(p, user, true, 0)
+	n, cp, err := f.resolve(p, user, true, 0)
 	if err == nil {
 		defer f.mu.Unlock()
 		if !canAccess(n, user, 2) {
 			return ErrPermission
+		}
+		if f.readOnly(cp) {
+			return ErrReadOnly
 		}
 		n.ModTime = f.Now()
 		return nil

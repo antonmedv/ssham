@@ -1,4 +1,3 @@
-// Running scripts.
 $ echo 'echo hello from $0 $1; whoami' > /tmp/s.sh; chmod +x /tmp/s.sh; /tmp/s.sh arg
 hello from /tmp/s.sh arg
 root
@@ -8,35 +7,67 @@ root
 $ sh /tmp/s.sh x
 hello from /tmp/s.sh x
 root
-$ bash -c 'echo inline $0 $1; exit 4' name one
+$ sh -c 'echo inline $0 $1; exit 4' name one
 inline name one
 [exit 4]
 $ echo 'echo piped' | sh
 piped
-$ echo 'exit 9' > /tmp/e.sh; sh /tmp/e.sh; echo $?
-9
 $ chmod -x /tmp/s.sh; /tmp/s.sh
--bash: /tmp/s.sh: Permission denied
+sh: /tmp/s.sh: Permission denied
 [exit 126]
 $ /tmp
--bash: /tmp: Is a directory
+sh: /tmp: Permission denied
 [exit 126]
 $ /nope
--bash: /nope: No such file or directory
+sh: /nope: not found
 [exit 127]
-
-// Recursion is bounded.
 $ echo 'sh /tmp/r.sh' > /tmp/r.sh; sh /tmp/r.sh 2>&1 | tail -1
--bash: /tmp/r.sh: maximum nesting level exceeded
+sh: /tmp/r.sh: maximum nesting level exceeded
 
-// Dropped binaries crash; stock ones run.
-$ printf '\177ELFbinary' > /tmp/bot; chmod +x /tmp/bot; /tmp/bot -c 1
-Segmentation fault (core dumped)
+// BusyBox: every applet is the same binary, chosen by name.
+$ ls -l /bin/ls /sbin/reboot /usr/bin/wget
+lrwxrwxrwx 1 root root  7 Feb 10  2025 /bin/ls -> busybox
+lrwxrwxrwx 1 root root 14 Feb 10  2025 /sbin/reboot -> ../bin/busybox
+lrwxrwxrwx 1 root root 17 Feb 10  2025 /usr/bin/wget -> ../../bin/busybox
+$ /bin/busybox echo via busybox
+via busybox
+$ busybox nosuch
+nosuch: applet not found
+[exit 127]
+$ cp /bin/busybox /tmp/cat; /tmp/cat /etc/hostname
+ipcam
+$ ln -s /bin/busybox /tmp/curl; /tmp/curl
+curl: applet not found
+[exit 127]
+$ ls --help
+BusyBox v1.31.1 (2021-03-12 11:24:03 CST) multi-call binary.
+
+Usage: ls [-1AaCxdLHRFplinshrSXvctu] [-w WIDTH] [FILE]...
+
+// Binaries: an ARM one "crashes", one for another CPU fails like it would.
+$ printf '\177ELF\001\001\001\000\000\000\000\000\000\000\000\000\002\000\050\000' > /tmp/arm; chmod +x /tmp/arm; /tmp/arm
+Segmentation fault
 [exit 139]
-$ /usr/bin/whoami
-root
-$ /bin/echo via path
-via path
-$ rm /usr/bin/ls; ls
-ls: command not found
+$ printf '\177ELF\001\002\001\000\000\000\000\000\000\000\000\000\000\002\000\010' > /tmp/mips; chmod +x /tmp/mips; /tmp/mips
+/tmp/mips: line 1: syntax error: unexpected "("
+[exit 2]
+$ /app/ipcam
+Segmentation fault
+[exit 139]
+
+// Commands that are not on the device.
+$ curl http://example.com
+sh: curl: not found
+[exit 127]
+$ sudo id
+sh: sudo: not found
+[exit 127]
+$ bash
+sh: bash: not found
+[exit 127]
+$ apt install x
+sh: apt: not found
+[exit 127]
+$ vi /etc/passwd
+sh: vi: not found
 [exit 127]

@@ -1,123 +1,156 @@
-// cat
-$ cat /etc/hostname /etc/issue.net
-ip-10-0-2-15
-Ubuntu 24.04.1 LTS
+$ ls /
+app  bin  dev  etc  home  lib  mnt  proc  root  sbin  sys  tmp  usr  var
+$ ls -l /
+total 56
+drwxr-xr-x 3 root root 4096 Feb 10  2025 app
+drwxr-xr-x 2 root root 4096 Feb 10  2025 bin
+drwxr-xr-x 3 root root 4096 Feb 10  2025 dev
+drwxr-xr-x 4 root root 4096 Feb 10  2025 etc
+drwxr-xr-x 2 root root 4096 Feb 10  2025 home
+drwxr-xr-x 2 root root 4096 Feb 10  2025 lib
+drwxr-xr-x 3 root root 4096 Feb 10  2025 mnt
+drwxr-xr-x 3 root root 4096 Feb 10  2025 proc
+drwx------ 2 root root 4096 Feb 10  2025 root
+drwxr-xr-x 2 root root 4096 Feb 10  2025 sbin
+drwxr-xr-x 2 root root 4096 Feb 10  2025 sys
+drwxrwxrwt 2 root root 4096 Feb 10  2025 tmp
+drwxr-xr-x 5 root root 4096 Feb 10  2025 usr
+drwxr-xr-x 6 root root 4096 Feb 10  2025 var
+$ ls -la /mnt/mtd/Config
+total 20
+drwxr-xr-x 2 root root 4096 Feb 10  2025 .
+drwxr-xr-x 3 root root 4096 Feb 10  2025 ..
+-rw------- 1 root root   87 Feb 10  2025 Account
+-rw-r--r-- 1 root root  130 Feb 10  2025 network.conf
+-rw------- 1 root root  165 Feb 10  2025 shadow
+$ ls -l /bin | head -4
+total 1136
+lrwxrwxrwx 1 root root       7 Feb 10  2025 ash -> busybox
+-rwxr-xr-x 1 root root 1007208 Feb 10  2025 busybox
+lrwxrwxrwx 1 root root       7 Feb 10  2025 cat -> busybox
+$ ls /nope
+ls: /nope: No such file or directory
+[exit 2]
+$ cat /etc/passwd /etc/hostname
+root:x:0:0:root:/root:/bin/sh
+daemon:x:1:1:daemon:/usr/sbin:/bin/false
+bin:x:2:2:bin:/bin:/bin/false
+sys:x:3:3:sys:/dev:/bin/false
+nobody:x:65534:65534:nobody:/home:/bin/false
+ipcam
+$ cat /nope
+cat: can't open '/nope': No such file or directory
+[exit 1]
 $ cat -n /etc/hostname
-     1	ip-10-0-2-15
-$ cat /nope /etc/hostname
-cat: /nope: No such file or directory
-ip-10-0-2-15
+     1	ipcam
+$ cd /tmp && touch t && mkdir d && ls -l
+total 4
+drwxr-xr-x 2 root root 4096 Nov 17 12:00 d
+-rw-r--r-- 1 root root    0 Nov 17 12:00 t
+$ mkdir /tmp/d
+mkdir: can't create directory '/tmp/d': File exists
 [exit 1]
-$ echo piped | cat - /etc/hostname
-piped
-ip-10-0-2-15
-
-// touch, mkdir, rmdir, rm
-$ touch /tmp/t && ls -l /tmp/t
--rw-r--r-- 1 root root 0 Nov 17 12:00 /tmp/t
-$ mkdir /tmp/d && mkdir /tmp/d
-mkdir: cannot create directory '/tmp/d': File exists
+$ mkdir /etc/x
+mkdir: can't create directory '/etc/x': Read-only file system
 [exit 1]
-$ mkdir /nope/x
-mkdir: cannot create directory '/nope/x': No such file or directory
+$ rmdir /tmp/d; rmdir /nope
+rmdir: '/nope': No such file or directory
 [exit 1]
-$ mkdir -p /tmp/p/q/r && rmdir /tmp/p/q/r && ls /tmp/p/q
-$ rmdir /tmp/p
-rmdir: failed to remove '/tmp/p': Directory not empty
+$ rm /tmp/t; rm /nope; rm -f /nope; rm /tmp
+rm: can't remove '/nope': No such file or directory
+rm: '/tmp' is a directory
 [exit 1]
-$ rm /tmp/p
-rm: cannot remove '/tmp/p': Is a directory
+$ rm -rf /etc
+rm: can't remove '/etc/TZ': Read-only file system
+rm: can't remove '/etc/dropbear/dropbear_ecdsa_host_key': Read-only file system
+rm: can't remove '/etc/dropbear': Read-only file system
+rm: can't remove '/etc/group': Read-only file system
+rm: can't remove '/etc/hostname': Read-only file system
+rm: can't remove '/etc/hosts': Read-only file system
+rm: can't remove '/etc/init.d/rcS': Read-only file system
+rm: can't remove '/etc/init.d': Read-only file system
+rm: can't remove '/etc/inittab': Read-only file system
+rm: can't remove '/etc/mtab': Read-only file system
+rm: can't remove '/etc/passwd': Read-only file system
+rm: can't remove '/etc/profile': Read-only file system
+rm: can't remove '/etc/resolv.conf': Read-only file system
+rm: can't remove '/etc/shadow': Read-only file system
+rm: can't remove '/etc/shells': Read-only file system
+rm: can't remove '/etc': Read-only file system
 [exit 1]
-$ rm -r /tmp/p && ls /tmp/p
-ls: cannot access '/tmp/p': No such file or directory
-[exit 2]
-$ rm /nope; rm -f /nope
-rm: cannot remove '/nope': No such file or directory
-$ rm -rf /
-rm: it is dangerous to operate recursively on '/'
-rm: use --no-preserve-root to override this failsafe
-[exit 1]
-$ rm -rf .
-rm: refusing to remove '.' or '..' directory: skipping '.'
-[exit 1]
-
-// cp, mv, ln
-$ cp /etc/hosts /tmp/h && head -1 /tmp/h
-127.0.0.1 localhost
-$ mv /tmp/h /tmp/h2 && ls /tmp/h /tmp/h2
-ls: cannot access '/tmp/h': No such file or directory
-/tmp/h2
-[exit 2]
-$ cp /etc /tmp/e
-cp: -r not specified; omitting directory '/etc'
-[exit 1]
-$ cp -r /etc/ssh /tmp/ssh && ls /tmp/ssh
-ssh_host_ed25519_key  ssh_host_ed25519_key.pub  sshd_config
+$ cp /etc/passwd /tmp/p && head -1 /tmp/p
+root:x:0:0:root:/root:/bin/sh
 $ cp /nope /tmp/x
-cp: cannot stat '/nope': No such file or directory
+cp: can't stat '/nope': No such file or directory
 [exit 1]
-$ ln -s /etc/hostname /tmp/hn && cat /tmp/hn && ls -l /tmp/hn
-ip-10-0-2-15
-lrwxrwxrwx 1 root root 13 Nov 17 12:00 /tmp/hn -> /etc/hostname
-$ readlink /tmp/hn; readlink -f /tmp/hn; realpath /bin/ls
-/etc/hostname
-/etc/hostname
-/usr/bin/ls
-
-// chmod, chown
-$ touch /tmp/m; chmod 755 /tmp/m; ls -l /tmp/m
--rwxr-xr-x 1 root root 0 Nov 17 12:00 /tmp/m
-$ chmod u-x,go= /tmp/m; ls -l /tmp/m
--rw------- 1 root root 0 Nov 17 12:00 /tmp/m
-$ chmod +x /tmp/m; ls -l /tmp/m
--rwx--x--x 1 root root 0 Nov 17 12:00 /tmp/m
-$ chmod 1777 /tmp/m; ls -l /tmp/m
--rwxrwxrwt 1 root root 0 Nov 17 12:00 /tmp/m
+$ cp /etc /tmp/e
+cp: omitting directory '/etc'
+[exit 1]
+$ cp /etc/passwd /bin/
+cp: can't create '/bin/': Read-only file system
+[exit 1]
+$ mv /tmp/p /tmp/q && ls /tmp
+q
+$ mv /etc/passwd /tmp/
+mv: can't rename '/etc/passwd': Read-only file system
+[exit 1]
+$ ln -s /etc/hostname /tmp/hn && cat /tmp/hn
+ipcam
+$ ln -s /etc/hostname /bin/hn
+ln: /bin/hn: Read-only file system
+[exit 1]
+$ touch /tmp/m; chmod 777 /tmp/m; ls -l /tmp/m
+-rwxrwxrwx 1 root root 0 Nov 17 12:00 /tmp/m
+$ chmod +x /etc/passwd
+chmod: /etc/passwd: Read-only file system
+[exit 1]
 $ chmod bad /tmp/m
-chmod: invalid mode: 'bad'
+chmod: invalid mode 'bad'
 [exit 1]
-$ chown www-data:www-data /tmp/m; ls -l /tmp/m
--rwxrwxrwt 1 www-data www-data 0 Nov 17 12:00 /tmp/m
-$ chattr -ia /tmp/m
-// stat, file, du
-$ stat /etc/hostname
-  File: /etc/hostname
-  Size: 13        	Blocks: 1          IO Block: 4096   regular file
-Device: 801h/2049d	Inode: 265091      Links: 1
-Access: (0644/-rw-r--r--)  Uid: (    0/    root)   Gid: (    0/    root)
-Access: 2026-07-05 07:42:00.000000000 +0000
-Modify: 2026-07-05 07:42:00.000000000 +0000
-Change: 2026-07-05 07:42:00.000000000 +0000
- Birth: 2026-07-05 07:42:00.000000000 +0000
-$ stat -c '%n %a %U %s' /etc/shadow /tmp
-/etc/shadow 640 root 387
-/tmp 1777 root 4096
-$ file /etc/passwd /usr/bin/ls /tmp /var/backups/db_dump_2024-10-01.sql.gz /bin
-/etc/passwd: ASCII text
-/usr/bin/ls: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=3f1e0a4f2b8c6e2d7a9b1c0d5e4f3a2b1c0d9e8f, for GNU/Linux 3.2.0, stripped
-/tmp: directory
-/var/backups/db_dump_2024-10-01.sql.gz: gzip compressed data, from Unix
-/bin: symbolic link to usr/bin
-$ du -sh /etc/ssh
-16K	/etc/ssh
-
-// paths
-$ basename /usr/bin/ls; basename /tmp/x.sh .sh; dirname /usr/bin/ls
-ls
-x
+$ chown nobody /tmp/m; ls -l /tmp/m
+-rwxrwxrwx 1 nobody root 0 Nov 17 12:00 /tmp/m
+$ chown hacker /tmp/m
+chown: unknown user hacker
+[exit 1]
+$ basename /usr/bin/wget; dirname /usr/bin/wget; which wget ls nosuch
+wget
 /usr/bin
-$ which ls sudo nosuch; whereis ls
-/usr/bin/ls
-/usr/bin/sudo
-ls: /usr/bin/ls /usr/share/man/man1/ls.1.gz
+/usr/bin/wget
+/bin/ls
+[exit 1]
+$ tar xzf /nope.tgz
+tar: can't open '/nope.tgz': No such file or directory
+[exit 1]
+$ dd if=/bin/echo bs=52 count=1 2>/dev/null | head -c 4 | tail -c 3
+ELF
+[no newline]
+$ dd if=/bin/busybox bs=52 count=1 of=/tmp/hdr; ls -l /tmp/hdr
+1+0 records in
+1+0 records out
+52 bytes (52B) copied, 0.000097 seconds, 521.9KB/s
+-rw-r--r-- 1 root root 52 Nov 17 12:00 /tmp/hdr
+$ dd if=/dev/zero of=/tmp/z bs=1k count=4
+4+0 records in
+4+0 records out
+4096 bytes (4.0KB) copied, 0.000198 seconds, 19.7MB/s
+$ sync
+// rm -rf / wipes the writable mounts and fails on everything else.
+@user root
+$ echo x > /tmp/f; rm -rf / 2>&1 | grep -v 'Read-only' ; ls -la /tmp /mnt/mtd; ls /etc/passwd /bin/ls; cat /etc/shadow
+rm: can't remove '/dev': Device or resource busy
+rm: can't remove '/mnt/mtd': Device or resource busy
+rm: can't remove '/proc/sys/kernel/hostname': Device or resource busy
+rm: can't remove '/tmp': Device or resource busy
+rm: can't remove '/var': Device or resource busy
+/tmp:
+total 8
+drwxrwxrwt  2 root root 4096 Nov 17 12:00 .
+drwxr-xr-x 16 root root 4096 Feb 10  2025 ..
 
-@user admin
-$ chown admin /etc/passwd
-chown: changing ownership of '/etc/passwd': Operation not permitted
-[exit 1]
-$ chmod 777 /etc/passwd
-chmod: changing permissions of '/etc/passwd': Operation not permitted
-[exit 1]
-$ cp /etc/shadow /tmp/s
-cp: cannot open '/etc/shadow' for reading: Permission denied
+/mnt/mtd:
+total 8
+drwxr-xr-x 2 root root 4096 Nov 17 12:00 .
+drwxr-xr-x 3 root root 4096 Feb 10  2025 ..
+/bin/ls  /etc/passwd
+cat: can't open '/etc/shadow': No such file or directory
 [exit 1]

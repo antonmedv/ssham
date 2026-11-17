@@ -1,101 +1,83 @@
-// cd and pwd.
-$ pwd
+$ pwd; cd /usr/bin && pwd; cd .. && pwd; cd -
 /root
-$ cd /usr/bin && pwd
 /usr/bin
-$ cd .. && pwd
 /usr
-$ cd - 
 /usr/bin
 $ cd /nope
--bash: cd: /nope: No such file or directory
-[exit 1]
+sh: cd: can't cd to /nope: No such file or directory
+[exit 2]
 $ cd /etc/passwd
--bash: cd: /etc/passwd: Not a directory
-[exit 1]
-$ cd /tmp /etc
--bash: cd: too many arguments
-[exit 1]
-$ cd && pwd
+sh: cd: can't cd to /etc/passwd: Not a directory
+[exit 2]
+$ cd; pwd
 /root
-
-// echo and printf.
 $ echo -n no newline
 no newline
 [no newline]
 $ echo -e 'tab\there\nnewline'
 tab	here
 newline
-$ echo -e 'stop\c here'
-stop
-[no newline]
 $ printf '%s=%d\n' a 1 b 2
 a=1
 b=2
-$ printf '%5s|%-5s|%03d|%x\n' ab cd 7 255
-   ab|cd   |007|ff
-$ printf 'no args\n'
-no args
-
-// Variables, aliases and types.
 $ export FOO=bar; env | grep FOO
 FOO=bar
 $ export 1BAD=x
--bash: export: `1BAD=x': not a valid identifier
-[exit 1]
-$ alias hi='echo hello'; hi there
+sh: export: bad variable name
+[exit 2]
+$ export -p | head -3
+export FOO='bar'
+export HOME='/root'
+export LD_LIBRARY_PATH='/lib:/usr/lib'
+$ alias hi='echo hello'; hi there; alias
 hello there
-$ alias hi
-alias hi='echo hello'
+hi='echo hello'
 $ unalias hi; hi
-hi: command not found
+sh: hi: not found
 [exit 127]
-$ type cd ls ll nosuch
+$ type cd ls if nosuch
 cd is a shell builtin
-ls is aliased to `ls --color=auto'
-ll is aliased to `ls -alF'
--bash: type: nosuch: not found
-[exit 1]
+ls is /bin/ls
+if is a shell keyword
+nosuch: not found
+[exit 127]
 $ command -v ls cd
-/usr/bin/ls
+/bin/ls
 cd
-$ which ls nosuch
-/usr/bin/ls
-[exit 1]
 $ read -p "Name: " NAME
 < Ada
 Name: Ada
 $ echo "hello $NAME"
 hello Ada
-$ echo 'a b c' | (read X Y; echo "$Y/$X")
-b c/a
-
-// test and [.
-$ test -d /etc && echo dir; [ -f /etc/passwd ] && echo file; [ -e /nope ] || echo missing
+$ test -d /etc && echo dir; [ -f /etc/passwd ] && echo file; [ 3 -gt 5 ] || echo small
 dir
 file
-missing
-$ [ 3 -gt 5 ] || echo small; [ abc = abc ] && echo equal; [ -z "" ] && echo empty
 small
-equal
-empty
 $ [ 1 -lt 2
--bash: [: missing `]'
+sh: [: missing ]
 [exit 2]
-$ [ -x /usr/bin/ls ] && echo exec; [ -w /etc/passwd ] && echo writable
-exec
-writable
-
-// Scripts, source and eval.
-$ echo 'echo sourced $1' > /tmp/s.sh; . /tmp/s.sh arg; source /tmp/s.sh
+$ set -- a b c; echo $# $2; shift; echo $1
+3 b
+b
+$ let x=2*3; echo $x
+6
+$ local x=1
+sh: local: not in a function
+[exit 2]
+$ echo 'echo sourced $1' > /tmp/s.sh; . /tmp/s.sh arg
 sourced arg
-sourced
 $ eval 'echo $((1+1))'
 2
-$ eval "X=7"; echo $X
-7
-$ history
-$ ulimit -n
+$ ulimit -n; umask
 1024
-$ umask
 0022
+$ help
+Built-in commands:
+------------------
+	. : [ alias break cd chdir command continue echo eval exec exit
+	export false hash help history jobs kill let local printf pwd
+	read readonly return set shift source test times trap true type
+	ulimit umask unalias unset wait
+$ exit abc
+sh: exit: Illegal number: abc
+[exit 2]

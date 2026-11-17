@@ -1,0 +1,16 @@
+#!/bin/sh
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t tmpfs -o size=29528k tmpfs /dev
+mount -t tmpfs -o size=29528k tmpfs /tmp
+mount -t tmpfs -o size=29528k tmpfs /var
+mkdir -p /dev/pts /var/run /var/log /var/lock
+mount -t devpts devpts /dev/pts
+mount -t jffs2 /dev/mtdblock4 /mnt/mtd
+hostname -F /etc/hostname
+ifconfig lo 127.0.0.1 up
+ifconfig eth0 192.168.1.108 netmask 255.255.255.0 up
+route add default gw 192.168.1.1
+/sbin/syslogd -C64
+/usr/sbin/dropbear -R -p 22
+cd /app && ./ipcam &

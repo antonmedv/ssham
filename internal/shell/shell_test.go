@@ -20,45 +20,34 @@ func TestTranscripts(t *testing.T) {
 func TestSessionsAreIsolated(t *testing.T) {
 	a := shelltest.New(t, "root")
 	b := shelltest.New(t, "root")
-	a.Run("rm -rf /etc && touch /tmp/marker")
-	out, _ := b.Run("ls /tmp/marker; cat /etc/hostname")
-	if !strings.Contains(out, "No such file") || !strings.Contains(out, "ip-10-0-2-15") {
+	a.Run("touch /tmp/marker; echo pw > /mnt/mtd/Config/Account")
+	out, _ := b.Run("ls /tmp/marker; head -1 /mnt/mtd/Config/Account")
+	if !strings.Contains(out, "No such file") || !strings.Contains(out, "[admin]") {
 		t.Fatalf("second session saw first session's changes:\n%s", out)
 	}
 }
 
-func TestReplSudoAndExit(t *testing.T) {
+func TestReplNestedShellAndExit(t *testing.T) {
+	// Any login name gets the device's root shell.
 	s := shelltest.New(t, "admin")
-	out, status := s.Repl("sudo -i", "hunter2", "whoami", "exit", "whoami", "exit")
-	if status != 0 {
+	out, status := s.Repl("cd /tmp", "sh", "pwd", "exit", "whoami", "exit 3")
+	if status != 3 {
 		t.Errorf("status = %d", status)
 	}
-	want := `admin@ip-10-0-2-15:~$ sudo -i
-[sudo] password for admin: ` + `
-root@ip-10-0-2-15:~# whoami
-root
-root@ip-10-0-2-15:~# exit
-exit
-admin@ip-10-0-2-15:~$ whoami
-admin
-admin@ip-10-0-2-15:~$ exit
-`
+	want := "~ # cd /tmp\n/tmp # sh\n/tmp # pwd\n/tmp\n/tmp # exit\n/tmp # whoami\nroot\n/tmp # exit 3\n"
 	if out != want {
-		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+		t.Errorf("got:\n%q\nwant:\n%q", out, want)
 	}
-	if ev := s.Events("password_entered"); len(ev) != 1 || ev[0]["password"] != "hunter2" {
-		t.Errorf("password events: %v", ev)
-	}
-	if ev := s.Events("input"); len(ev) != 5 {
+	if ev := s.Events("input"); len(ev) != 6 {
 		t.Errorf("input events: %v", ev)
 	}
 }
 
-func TestReplLogoutOnEOF(t *testing.T) {
+func TestReplCtrlDIsSilent(t *testing.T) {
 	s := shelltest.New(t, "root")
-	out, _ := s.Repl("bash", "whoami")
-	// Ctrl+D leaves the nested bash first, then the login shell.
-	if !strings.HasSuffix(out, "root@ip-10-0-2-15:~# \nexit\nroot@ip-10-0-2-15:~# \n") {
+	out, _ := s.Repl("sh")
+	// Ctrl+D leaves the nested sh, then logs out; ash prints nothing.
+	if out != "~ # sh\n~ # \n~ # \n" {
 		t.Errorf("got:\n%q", out)
 	}
 }
@@ -85,17 +74,16 @@ func TestPanicsAreContained(t *testing.T) {
 
 	// Like a segfault, the panic ends that command only.
 	out, status := s.Run("echo before; boom; echo after")
-	if out != "before\nSegmentation fault (core dumped)\nafter\n" || status != 0 {
+	if out != "before\nSegmentation fault\nafter\n" || status != 0 {
 		t.Errorf("Run: %q %d", out, status)
 	}
 	out, status = s.Exec("boom")
-	if out != "Segmentation fault (core dumped)\n" || status != 139 {
+	if out != "Segmentation fault\n" || status != 139 {
 		t.Errorf("Exec: %q %d", out, status)
 	}
 	if ev := s.Events("panic"); len(ev) != 2 {
 		t.Errorf("panic events: %v", ev)
 	}
-	// The session still works.
 	if out, _ := s.Run("whoami"); out != "root\n" {
 		t.Errorf("after panic: %q", out)
 	}
@@ -110,8 +98,9 @@ func TestComplete(t *testing.T) {
 		{"whoa", []string{"whoami"}},
 		{"cat /etc/host", []string{"/etc/hostname", "/etc/hosts"}},
 		{"cd /us", []string{"/usr/"}},
-		{"ls ~/.ba", []string{"~/.bash_history", "~/.bashrc"}},
+		{"cat /mnt/mtd/Config/A", []string{"/mnt/mtd/Config/Account"}},
 		{"echo hi | gre", []string{"grep"}},
+		{"curl", nil},
 	}
 	for _, tt := range tests {
 		_, got := sh.Complete(tt.line)

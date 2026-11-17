@@ -15,7 +15,7 @@ import (
 
 func init() {
 	register(
-		shell.Command{Name: "ls", Aliases: []string{"dir"}, Run: cmdLs},
+		shell.Command{Name: "ls", Usage: "[-1AaCxdLHRFplinshrSXvctu] [-w WIDTH] [FILE]...", Run: cmdLs},
 	)
 }
 
@@ -172,7 +172,7 @@ func cmdLs(e *shell.Env) int {
 			n, err = e.FS.Stat(p)
 		}
 		if err != nil {
-			fmt.Fprintf(e.Stderr, "ls: cannot access '%s': %s\n", t, err)
+			fmt.Fprintf(e.Stderr, "ls: %s: %s\n", t, err)
 			status = 2
 			continue
 		}
@@ -190,7 +190,7 @@ func cmdLs(e *shell.Env) int {
 	listDir = func(name, p string, header bool) {
 		children, err := e.FS.ReadDir(p)
 		if err != nil {
-			fmt.Fprintf(e.Stderr, "ls: cannot open directory '%s': %s\n", name, err)
+			fmt.Fprintf(e.Stderr, "ls: can't open '%s': %s\n", name, err)
 			status = 2
 			return
 		}

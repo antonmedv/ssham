@@ -11,7 +11,7 @@ import (
 
 func init() {
 	register(
-		shell.Command{Name: "find", Run: cmdFind},
+		shell.Command{Name: "find", Dir: "/usr/bin", Usage: "[-HL] [PATH]... [OPTIONS] [ACTIONS]", Run: cmdFind},
 	)
 }
 
@@ -60,7 +60,7 @@ func cmdFind(e *shell.Env) int {
 		}
 		n, err := e.FS.Lstat(p)
 		if err != nil {
-			fmt.Fprintf(e.Stderr, "find: '%s': %s\n", shown, err)
+			fmt.Fprintf(e.Stderr, "find: %s: %s\n", shown, err)
 			status = 1
 			return
 		}
@@ -90,7 +90,7 @@ func cmdFind(e *shell.Env) int {
 		}
 		children, err := e.FS.ReadDir(p)
 		if err != nil {
-			fmt.Fprintf(e.Stderr, "find: '%s': %s\n", shown, err)
+			fmt.Fprintf(e.Stderr, "find: %s: %s\n", shown, err)
 			status = 1
 			return
 		}

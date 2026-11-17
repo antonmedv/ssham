@@ -3,13 +3,18 @@ package shell
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/antonmedv/ssham/internal/audit"
+	"github.com/antonmedv/ssham/internal/rootfs"
 	"github.com/antonmedv/ssham/internal/vfs"
 )
 
@@ -36,7 +41,7 @@ func (s *Shell) Exec(ctx context.Context, line string) (status int) {
 		// A bug in a simulated command must not take down the honeypot.
 		if r := recover(); r != nil {
 			s.log.Event(audit.Panic, "line", line, "panic", fmt.Sprint(r))
-			s.write("Segmentation fault (core dumped)\n")
+			s.write("Segmentation fault\n")
 			s.status, status = 139, 139
 		}
 	}()
@@ -50,7 +55,7 @@ func (s *Shell) Capture(ctx context.Context, line string, stdin io.Reader) (outp
 	defer func() {
 		if r := recover(); r != nil {
 			s.log.Event(audit.Panic, "line", line, "panic", fmt.Sprint(r))
-			out.WriteString("Segmentation fault (core dumped)\n")
+			out.WriteString("Segmentation fault\n")
 			output, code = out.String(), 139
 		}
 	}()
@@ -67,7 +72,7 @@ func (s *Shell) execString(ctx context.Context, src string, std stdio) int {
 	}
 	l, err := parse(src)
 	if err != nil {
-		fmt.Fprintf(std.err, "-bash: %v\n", err)
+		fmt.Fprintf(std.err, "sh: %v\n", err)
 		s.status = 2
 		return s.status
 	}
@@ -78,7 +83,7 @@ func (s *Shell) execString(ctx context.Context, src string, std stdio) int {
 func (s *Shell) runList(ctx context.Context, l *list, std stdio) int {
 	prevOp := ";"
 	for i, pl := range l.items {
-		if s.exited || s.leaving || ctx.Err() != nil {
+		if s.exited || s.leaving || s.jump != 0 || ctx.Err() != nil {
 			break
 		}
 		skip := (prevOp == "&&" && s.status != 0) || (prevOp == "||" && s.status == 0)
@@ -124,6 +129,12 @@ func (s *Shell) runPipeline(ctx context.Context, pl *pipeline, std stdio) int {
 			break
 		}
 	}
+	if pl.negate {
+		if status == 0 {
+			return 1
+		}
+		return 0
+	}
 	return status
 }
 
@@ -133,14 +144,25 @@ func (s *Shell) runCommand(ctx context.Context, c *command, std stdio) int {
 	}
 	std, flush, ok := s.redirect(ctx, c.redirs, std)
 	defer flush()
+	if !s.checkExpand(std.err) {
+		return 2
+	}
 	if !ok {
 		return 1
 	}
 
-	if c.group != nil {
-		// ( ... ) is a subshell.
-		status, _ := s.nest(true, nil, func() int { return s.runList(ctx, c.group, std) })
+	switch {
+	case c.subshell != nil:
+		status, _ := s.nest(true, nil, func() int { return s.runList(ctx, c.subshell, std) })
 		return status
+	case c.brace != nil:
+		return s.runList(ctx, c.brace, std)
+	case c.ifc != nil:
+		return s.runIf(ctx, c.ifc, std)
+	case c.loop != nil:
+		return s.runLoop(ctx, c.loop, std)
+	case c.forc != nil:
+		return s.runFor(ctx, c.forc, std)
 	}
 
 	// Plain assignments: X=1 Y=2
@@ -149,10 +171,16 @@ func (s *Shell) runCommand(ctx context.Context, c *command, std stdio) int {
 			name, val, _ := strings.Cut(a, "=")
 			s.setVar(name, s.expandOne(ctx, val))
 		}
+		if !s.checkExpand(std.err) {
+			return 2
+		}
 		return 0
 	}
 
 	args := s.expandWords(ctx, c.words)
+	if !s.checkExpand(std.err) {
+		return 2
+	}
 	if len(args) == 0 {
 		return 0
 	}
@@ -184,6 +212,77 @@ func (s *Shell) withVars(vars []string, fn func() int) int {
 		s.exports[name] = true
 	}
 	return fn()
+}
+
+// maxIterations bounds a loop. A loop that runs longer is treated as
+// endless: it waits like a hung command, until Ctrl+C or disconnect,
+// instead of burning CPU.
+const maxIterations = 10000
+
+func (s *Shell) runIf(ctx context.Context, c *ifClause, std stdio) int {
+	for i, cond := range c.conds {
+		s.runList(ctx, cond, std)
+		if s.jump != 0 || s.exited || s.leaving {
+			return s.status
+		}
+		if s.status == 0 {
+			return s.runList(ctx, c.bodies[i], std)
+		}
+	}
+	if c.elseBody != nil {
+		return s.runList(ctx, c.elseBody, std)
+	}
+	return 0
+}
+
+func (s *Shell) runLoop(ctx context.Context, c *loopClause, std stdio) int {
+	return s.loop(ctx, func(i int) bool {
+		s.runList(ctx, c.cond, std)
+		return (s.status == 0) != c.until
+	}, c.body, std)
+}
+
+func (s *Shell) runFor(ctx context.Context, c *forClause, std stdio) int {
+	items := s.args[min(1, len(s.args)):]
+	if c.in {
+		items = s.expandWords(ctx, c.words)
+	}
+	return s.loop(ctx, func(i int) bool {
+		if i >= len(items) {
+			return false
+		}
+		s.setVar(c.name, items[i])
+		return true
+	}, c.body, std)
+}
+
+// loop runs body while next(i) is true, handling break, continue and
+// endless loops.
+func (s *Shell) loop(ctx context.Context, next func(i int) bool, body *list, std stdio) int {
+	s.loopDepth++
+	defer func() { s.loopDepth-- }()
+	status := 0
+	for i := 0; ; i++ {
+		if i == maxIterations {
+			s.cfg.Sleep(ctx, 24*time.Hour)
+			return 130
+		}
+		if ctx.Err() != nil || s.exited || s.leaving || !next(i) || s.jump != 0 {
+			break
+		}
+		status = s.runList(ctx, body, std)
+		if s.jump > 0 { // break
+			s.jump--
+			break
+		}
+		if s.jump < 0 { // continue
+			s.jump++
+			if s.jump < 0 {
+				break // continue N: continue an outer loop
+			}
+		}
+	}
+	return status
 }
 
 // redirect applies redirections to std. Output redirected to a file is
@@ -219,7 +318,7 @@ func (s *Shell) redirect(ctx context.Context, redirs []redir, std stdio) (_ stdi
 			fallthrough
 		case ">", ">>", "&>", "&>>":
 			if target == "" {
-				fmt.Fprintf(std.err, "-bash: %s: ambiguous redirect\n", r.target)
+				fmt.Fprintln(std.err, "sh: can't create : nonexistent directory")
 				return std, flush, false
 			}
 			var w io.Writer
@@ -228,7 +327,7 @@ func (s *Shell) redirect(ctx context.Context, redirs []redir, std stdio) (_ stdi
 			} else {
 				f, err := s.openOutput(target, r.op == ">>" || r.op == "&>>", std.err)
 				if err != nil {
-					fmt.Fprintf(std.err, "-bash: %s: %s\n", target, err)
+					fmt.Fprintf(std.err, "sh: can't create %s: %s\n", target, ashError(err, true))
 					return std, flush, false
 				}
 				flushes = append(flushes, f.flush)
@@ -245,7 +344,7 @@ func (s *Shell) redirect(ctx context.Context, redirs []redir, std stdio) (_ stdi
 		case "<", "<>":
 			data, err := s.view().ReadFile(target)
 			if err != nil {
-				fmt.Fprintf(std.err, "-bash: %s: %s\n", target, err)
+				fmt.Fprintf(std.err, "sh: can't open %s: %s\n", target, ashError(err, false))
 				return std, flush, false
 			}
 			std.in = bytes.NewReader(data)
@@ -285,11 +384,14 @@ func (f *fileOutput) flush() {
 		return
 	}
 	if err := f.view.AppendFile(f.name, f.Bytes()); err != nil {
-		fmt.Fprintf(f.stderr, "-bash: %s: %s\n", f.name, err)
+		fmt.Fprintf(f.stderr, "sh: can't create %s: %s\n", f.name, ashError(err, true))
 	}
 }
 
-// run dispatches argv to a builtin, a simulated program, or a script.
+// busyboxPath is the multi-call binary that every applet links to.
+const busyboxPath = "/bin/busybox"
+
+// run dispatches argv to a builtin, an applet on $PATH, or a file.
 func (s *Shell) run(ctx context.Context, args []string, std stdio) int {
 	name := args[0]
 	if strings.Contains(name, "/") {
@@ -298,38 +400,46 @@ func (s *Shell) run(ctx context.Context, args []string, std stdio) int {
 	if b, ok := builtins[name]; ok {
 		return s.call(b.run, s.env(ctx, args, std))
 	}
-	if _, ok := s.lookPath(name); ok {
-		return s.runProgram(ctx, name, args, std)
+	if p, ok := s.lookPath(name); ok {
+		return s.exec(ctx, p, args, std)
 	}
-	fmt.Fprintf(std.err, "%s: command not found\n", name)
+	fmt.Fprintf(std.err, "sh: %s: not found\n", name)
 	return 127
 }
 
-// runProgram runs an installed program by name.
-func (s *Shell) runProgram(ctx context.Context, name string, args []string, std stdio) int {
+// applet returns the implementation of a BusyBox applet, or nil.
+func (s *Shell) applet(name string) func(*Env) int {
 	if c, ok := s.cfg.Commands.Lookup(name); ok {
-		if c.Run == nil {
-			return 0
-		}
-		return s.call(c.Run, s.env(ctx, args, std))
+		return c.Run
 	}
-	if b, ok := builtins[name]; ok && b.binary {
-		return s.call(b.run, s.env(ctx, args, std))
+	if b, ok := builtins[name]; ok && b.dir != "" {
+		return b.run
 	}
-	return 0 // installed, but not simulated
+	return nil
 }
 
-// call runs a command, turning a panic (a bug in the simulation) into a
-// crash of that one command, the way a segfault would look.
-func (s *Shell) call(run func(*Env) int, e *Env) (status int) {
-	defer func() {
-		if r := recover(); r != nil {
-			s.log.Event(audit.Panic, "command", strings.Join(e.Args, " "), "panic", fmt.Sprint(r))
-			fmt.Fprintln(e.Stderr, "Segmentation fault (core dumped)")
-			status = 139
-		}
-	}()
-	return run(e)
+// busybox runs an applet the way the multi-call binary picks it: by the
+// name it was invoked as.
+func (s *Shell) busybox(ctx context.Context, name string, args []string, std stdio) int {
+	run := s.applet(name)
+	if run == nil {
+		fmt.Fprintf(std.err, "%s: applet not found\n", name)
+		return 127
+	}
+	if _, ok := s.cfg.Commands.Lookup(name); ok && len(args) > 1 && args[1] == "--help" {
+		fmt.Fprint(std.out, s.usage(name))
+		return 0
+	}
+	return s.call(run, s.env(ctx, args, std))
+}
+
+// usage renders an applet's BusyBox usage text.
+func (s *Shell) usage(name string) string {
+	text := "No help available"
+	if c, ok := s.cfg.Commands.Lookup(name); ok && c.Usage != "" {
+		text = "Usage: " + name + " " + c.Usage
+	}
+	return rootfs.BusyBox + " multi-call binary.\n\n" + text + "\n"
 }
 
 // lookPath searches $PATH in the virtual filesystem.
@@ -346,35 +456,87 @@ func (s *Shell) lookPath(name string) (string, bool) {
 	return "", false
 }
 
-// runPath handles ./script.sh, /usr/bin/ls and friends.
+// runPath handles ./script.sh, /bin/ls and friends.
 func (s *Shell) runPath(ctx context.Context, args []string, std stdio) int {
 	name := args[0]
 	v := s.view()
 	n, err := v.Stat(name)
 	switch {
-	case err != nil:
-		fmt.Fprintf(std.err, "-bash: %s: %s\n", name, err)
+	case errors.Is(err, vfs.ErrNotExist):
+		fmt.Fprintf(std.err, "sh: %s: not found\n", name)
 		return 127
-	case n.IsDir():
-		fmt.Fprintf(std.err, "-bash: %s: Is a directory\n", name)
-		return 126
-	case !v.Can(n, vfs.Exec):
-		fmt.Fprintf(std.err, "-bash: %s: Permission denied\n", name)
+	case err != nil, n.IsDir(), !v.Can(n, vfs.Exec):
+		fmt.Fprintf(std.err, "sh: %s: Permission denied\n", name)
 		return 126
 	}
-	p := v.Abs(name)
-	if n.FakeSize > 0 {
-		// A stock binary: run the simulation if it is one we know.
-		return s.runProgram(ctx, path.Base(p), args, std)
+	return s.exec(ctx, v.Abs(name), args, std)
+}
+
+// exec runs the executable file at p.
+func (s *Shell) exec(ctx context.Context, p string, args []string, std stdio) int {
+	// BusyBox is recognized by the binary itself, so copies and links to
+	// it work too, as they would on the device.
+	if n, err := s.fs.Stat("root", p); err == nil && n.FakeSize == busyboxSize {
+		return s.busybox(ctx, path.Base(args[0]), args, std)
 	}
 	data, _ := s.fs.ReadFile("root", p)
-	if bytes.HasPrefix(data, []byte("\x7fELF")) || !isText(data) {
-		// A dropped payload: pretend it crashed.
-		s.log.Event(audit.ExecBinary, "path", p, "args", strings.Join(args[1:], " "))
-		fmt.Fprintln(std.err, "Segmentation fault (core dumped)")
+	if !bytes.HasPrefix(data, []byte("\x7fELF")) && isText(data) {
+		return s.runScript(ctx, p, data, args, std)
+	}
+	// A binary other than BusyBox, most likely a dropped payload. It is
+	// never run: an ARM binary "crashes", and one for another CPU fails the
+	// way ash fails on it (exec fails, so ash reads it as a script).
+	arch := elfArch(data)
+	sum := sha256.Sum256(data)
+	s.log.Event(audit.ExecBinary, "path", p, "args", strings.Join(args[1:], " "),
+		"arch", arch, "size", len(data), "sha256", hex.EncodeToString(sum[:]))
+	if arch == "arm" {
+		fmt.Fprintln(std.err, "Segmentation fault")
 		return 139
 	}
-	return s.runScript(ctx, p, data, args, std)
+	fmt.Fprintf(std.err, "%s: line 1: syntax error: unexpected \"(\"\n", args[0])
+	return 2
+}
+
+// elfArch names the CPU an ELF binary is built for.
+func elfArch(data []byte) string {
+	if len(data) < 20 || !bytes.HasPrefix(data, []byte("\x7fELF")) {
+		return "none"
+	}
+	machine := uint16(data[18]) | uint16(data[19])<<8
+	if data[5] == 2 { // big endian
+		machine = uint16(data[18])<<8 | uint16(data[19])
+	}
+	switch machine {
+	case 3:
+		return "x86"
+	case 8:
+		return "mips"
+	case 20:
+		return "powerpc"
+	case 40:
+		return "arm"
+	case 42:
+		return "superh"
+	case 62:
+		return "x86-64"
+	case 183:
+		return "aarch64"
+	}
+	return fmt.Sprintf("machine-%d", machine)
+}
+
+// call runs a command, turning a panic (a bug in the simulation) into a
+// crash of that one command, the way a segfault would look.
+func (s *Shell) call(run func(*Env) int, e *Env) (status int) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Event(audit.Panic, "command", strings.Join(e.Args, " "), "panic", fmt.Sprint(r))
+			fmt.Fprintln(e.Stderr, "Segmentation fault")
+			status = 139
+		}
+	}()
+	return run(e)
 }
 
 // nest runs fn one level deeper: in a script, sh -c, $(...), ( ... ) or a
@@ -415,7 +577,7 @@ func (s *Shell) runScript(ctx context.Context, p string, data []byte, args []str
 	s.log.Event(audit.ExecScript, "path", p, "content", truncate(string(data), 4096))
 	status, ok := s.nest(true, args, func() int { return s.execString(ctx, string(data), std) })
 	if !ok {
-		fmt.Fprintf(std.err, "-bash: %s: maximum nesting level exceeded\n", args[0])
+		fmt.Fprintf(std.err, "sh: %s: maximum nesting level exceeded\n", args[0])
 	}
 	return status
 }
@@ -428,4 +590,16 @@ func (s *Shell) commandSubst(ctx context.Context, src string) string {
 		return s.execString(ctx, src, stdio{strings.NewReader(""), out, s.term})
 	})
 	return strings.TrimRight(out.String(), "\n")
+}
+
+// ashError words a filesystem error the way BusyBox ash does: it has its
+// own text for a missing file, and uses strerror for the rest.
+func ashError(err error, creating bool) string {
+	if errors.Is(err, vfs.ErrNotExist) {
+		if creating {
+			return "nonexistent directory"
+		}
+		return "no such file"
+	}
+	return err.Error()
 }

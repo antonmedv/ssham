@@ -75,7 +75,9 @@ func (t *Term) Write(p []byte) (int, error) {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 
 	// A clear-screen sequence splits the output: print what came before,
-	// clear, then continue with what follows.
+	// clear, then continue with what follows. BusyBox's clear sends
+	// ESC[H ESC[J; others send ESC[H ESC[2J.
+	s = strings.ReplaceAll(s, "\x1b[H\x1b[J", clearSeq)
 	for {
 		i := strings.Index(s, clearSeq)
 		if i < 0 {

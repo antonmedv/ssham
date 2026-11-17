@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -11,7 +10,7 @@ import (
 
 func init() {
 	register(
-		shell.Command{Name: "awk", Aliases: []string{"gawk"}, Run: cmdAwk},
+		shell.Command{Name: "awk", Dir: "/usr/bin", Usage: "[OPTIONS] [AWK_PROGRAM] [FILE]...", Run: cmdAwk},
 	)
 }
 
@@ -20,8 +19,7 @@ func init() {
 func cmdAwk(e *shell.Env) int {
 	o := e.Flags("F", "v", "f")
 	if len(o.Args) == 0 {
-		fmt.Fprintln(e.Stderr, "usage: awk [POSIX or GNU style options] -f progfile [--] file ...\nusage: awk [POSIX or GNU style options] [--] 'program' file ...")
-		return 2
+		return e.Usage()
 	}
 	prog := strings.TrimSpace(o.Args[0])
 	data, status := e.ReadFiles(o.Args[1:])
