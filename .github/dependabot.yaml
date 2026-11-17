@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # Go modules (Wish, Bubble Tea, x/crypto, ...).
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    # Wait a week before proposing a new release, to avoid compromised
+    # packages. Security updates are not delayed.
+    cooldown:
+      default-days: 7
+    groups:
+      go-deps:
+        patterns: ["*"]
+
+  # Base images in the Dockerfile (golang, distroless).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+
+  # Actions used in .github/workflows (pinned by commit SHA).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
