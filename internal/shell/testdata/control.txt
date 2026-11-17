@@ -1,0 +1,66 @@
+// Lists: ; && || and exit status.
+$ true && echo yes; false && echo no
+yes
+[exit 1]
+$ false || echo fallback
+fallback
+$ true || echo skipped
+$ false; true && echo ran
+ran
+$ echo a; echo b ; echo c
+a
+b
+c
+$ bash -c "exit 3"; echo $?
+3
+
+// Pipes.
+$ echo c b a | tr ' ' '\n' | sort
+a
+b
+c
+$ cat /etc/passwd | grep root | cut -d: -f1
+root
+$ nosuchcmd | wc -l
+nosuchcmd: command not found
+0
+$ nosuchcmd 2>&1 | wc -l
+1
+
+// Groups and background jobs.
+$ (echo a; echo b) | sort -r
+b
+a
+$ (cd /tmp; pwd); pwd
+/tmp
+/root
+$ sleep 1 &
+[1] 25084
+$ echo ok &
+[2] 25085
+ok
+
+// Syntax errors.
+$ | foo
+-bash: syntax error near unexpected token `|'
+[exit 2]
+$ echo a;; echo b
+-bash: syntax error near unexpected token `;'
+[exit 2]
+$ echo (
+-bash: syntax error near unexpected token `('
+[exit 2]
+$ echo ok &&
+-bash: syntax error near unexpected token `newline'
+[exit 2]
+$ if true; then echo yes; fi
+if: command not found
+then: command not found
+fi: command not found
+[exit 127]
+
+// exit ends the session: nothing runs after it.
+$ exit 3
+[exit 3]
+$ echo unreachable
+[exit 3]

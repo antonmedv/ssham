@@ -1,0 +1,101 @@
+// cd and pwd.
+$ pwd
+/root
+$ cd /usr/bin && pwd
+/usr/bin
+$ cd .. && pwd
+/usr
+$ cd - 
+/usr/bin
+$ cd /nope
+-bash: cd: /nope: No such file or directory
+[exit 1]
+$ cd /etc/passwd
+-bash: cd: /etc/passwd: Not a directory
+[exit 1]
+$ cd /tmp /etc
+-bash: cd: too many arguments
+[exit 1]
+$ cd && pwd
+/root
+
+// echo and printf.
+$ echo -n no newline
+no newline
+[no newline]
+$ echo -e 'tab\there\nnewline'
+tab	here
+newline
+$ echo -e 'stop\c here'
+stop
+[no newline]
+$ printf '%s=%d\n' a 1 b 2
+a=1
+b=2
+$ printf '%5s|%-5s|%03d|%x\n' ab cd 7 255
+   ab|cd   |007|ff
+$ printf 'no args\n'
+no args
+
+// Variables, aliases and types.
+$ export FOO=bar; env | grep FOO
+FOO=bar
+$ export 1BAD=x
+-bash: export: `1BAD=x': not a valid identifier
+[exit 1]
+$ alias hi='echo hello'; hi there
+hello there
+$ alias hi
+alias hi='echo hello'
+$ unalias hi; hi
+hi: command not found
+[exit 127]
+$ type cd ls ll nosuch
+cd is a shell builtin
+ls is aliased to `ls --color=auto'
+ll is aliased to `ls -alF'
+-bash: type: nosuch: not found
+[exit 1]
+$ command -v ls cd
+/usr/bin/ls
+cd
+$ which ls nosuch
+/usr/bin/ls
+[exit 1]
+$ read -p "Name: " NAME
+< Ada
+Name: Ada
+$ echo "hello $NAME"
+hello Ada
+$ echo 'a b c' | (read X Y; echo "$Y/$X")
+b c/a
+
+// test and [.
+$ test -d /etc && echo dir; [ -f /etc/passwd ] && echo file; [ -e /nope ] || echo missing
+dir
+file
+missing
+$ [ 3 -gt 5 ] || echo small; [ abc = abc ] && echo equal; [ -z "" ] && echo empty
+small
+equal
+empty
+$ [ 1 -lt 2
+-bash: [: missing `]'
+[exit 2]
+$ [ -x /usr/bin/ls ] && echo exec; [ -w /etc/passwd ] && echo writable
+exec
+writable
+
+// Scripts, source and eval.
+$ echo 'echo sourced $1' > /tmp/s.sh; . /tmp/s.sh arg; source /tmp/s.sh
+sourced arg
+sourced
+$ eval 'echo $((1+1))'
+2
+$ eval "X=7"; echo $X
+7
+$ history
+$ ulimit -n
+1024
+$ umask
+0022

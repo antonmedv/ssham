@@ -1,0 +1,101 @@
+$ seq 5
+1
+2
+3
+4
+5
+$ seq 2 2 8
+2
+4
+6
+8
+$ seq -s , 3
+1,2,3
+$ seq 10 | head -3; seq 10 | head -n 2; seq 10 | head -1
+1
+2
+3
+1
+2
+1
+$ seq 10 | tail -3; seq 10 | tail -n +9
+8
+9
+10
+9
+10
+$ wc /etc/hostname; wc -l /etc/passwd /etc/group
+  1   1  13 /etc/hostname
+26 /etc/passwd
+13 /etc/group
+39 total
+$ echo one two three | wc -w
+3
+$ printf 'b\na\nc\na\n' | sort
+a
+a
+b
+c
+$ printf 'b\na\nc\na\n' | sort -u
+a
+b
+c
+$ printf 'b\na\nc\na\n' | sort -r
+c
+b
+a
+a
+$ printf '10\n9\n100\n' | sort -n
+9
+10
+100
+$ printf 'x 3\ny 1\nz 2\n' | sort -k2 -n
+y 1
+z 2
+x 3
+$ printf 'a\na\nb\na\n' | uniq
+a
+b
+a
+$ printf 'a\na\nb\na\n' | uniq -c
+      2 a
+      1 b
+      1 a
+$ head -2 /etc/passwd | cut -d: -f1,7
+root:/bin/bash
+daemon:/usr/sbin/nologin
+$ echo hello | cut -c2-4
+ell
+$ echo hello | tr a-z A-Z; echo hello | tr -d l; echo 'a   b' | tr -s ' '
+HELLO
+heo
+a b
+$ echo hello | tee /tmp/t1 /tmp/t2; cat /tmp/t1 /tmp/t2
+hello
+hello
+hello
+$ echo more | tee -a /tmp/t1 >/dev/null; cat /tmp/t1
+hello
+more
+$ echo -n hello | base64; echo aGVsbG8= | base64 -d
+aGVsbG8=
+hello
+[no newline]
+$ echo -n hello | md5sum; echo -n hello | sha256sum; md5sum /etc/hostname
+5d41402abc4b2a76b9719d911017c592  -
+2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  -
+d8b1c17cc6007583fd93c36c42aba9f9  /etc/hostname
+$ yes | head -3
+y
+y
+y
+$ echo abc | rev
+cba
+$ seq 5 | head -n -2
+1
+2
+3
+$ seq 5 | head -n -9
+$ seq 5 | tail -n -2
+4
+5

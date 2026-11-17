@@ -35,6 +35,10 @@ The bot sees `Segmentation fault`. You see the bot's URL.
 
 Run it on port 22 with Docker: [DEPLOY.md](DEPLOY.md).
 
+## Contributing
+
+Adding a fake command is one small Go file. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 [MIT](LICENSE)

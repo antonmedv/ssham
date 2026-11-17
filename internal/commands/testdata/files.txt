@@ -1,0 +1,123 @@
+// cat
+$ cat /etc/hostname /etc/issue.net
+ip-10-0-2-15
+Ubuntu 24.04.1 LTS
+$ cat -n /etc/hostname
+     1	ip-10-0-2-15
+$ cat /nope /etc/hostname
+cat: /nope: No such file or directory
+ip-10-0-2-15
+[exit 1]
+$ echo piped | cat - /etc/hostname
+piped
+ip-10-0-2-15
+
+// touch, mkdir, rmdir, rm
+$ touch /tmp/t && ls -l /tmp/t
+-rw-r--r-- 1 root root 0 Nov 17 12:00 /tmp/t
+$ mkdir /tmp/d && mkdir /tmp/d
+mkdir: cannot create directory '/tmp/d': File exists
+[exit 1]
+$ mkdir /nope/x
+mkdir: cannot create directory '/nope/x': No such file or directory
+[exit 1]
+$ mkdir -p /tmp/p/q/r && rmdir /tmp/p/q/r && ls /tmp/p/q
+$ rmdir /tmp/p
+rmdir: failed to remove '/tmp/p': Directory not empty
+[exit 1]
+$ rm /tmp/p
+rm: cannot remove '/tmp/p': Is a directory
+[exit 1]
+$ rm -r /tmp/p && ls /tmp/p
+ls: cannot access '/tmp/p': No such file or directory
+[exit 2]
+$ rm /nope; rm -f /nope
+rm: cannot remove '/nope': No such file or directory
+$ rm -rf /
+rm: it is dangerous to operate recursively on '/'
+rm: use --no-preserve-root to override this failsafe
+[exit 1]
+$ rm -rf .
+rm: refusing to remove '.' or '..' directory: skipping '.'
+[exit 1]
+
+// cp, mv, ln
+$ cp /etc/hosts /tmp/h && head -1 /tmp/h
+127.0.0.1 localhost
+$ mv /tmp/h /tmp/h2 && ls /tmp/h /tmp/h2
+ls: cannot access '/tmp/h': No such file or directory
+/tmp/h2
+[exit 2]
+$ cp /etc /tmp/e
+cp: -r not specified; omitting directory '/etc'
+[exit 1]
+$ cp -r /etc/ssh /tmp/ssh && ls /tmp/ssh
+ssh_host_ed25519_key  ssh_host_ed25519_key.pub  sshd_config
+$ cp /nope /tmp/x
+cp: cannot stat '/nope': No such file or directory
+[exit 1]
+$ ln -s /etc/hostname /tmp/hn && cat /tmp/hn && ls -l /tmp/hn
+ip-10-0-2-15
+lrwxrwxrwx 1 root root 13 Nov 17 12:00 /tmp/hn -> /etc/hostname
+$ readlink /tmp/hn; readlink -f /tmp/hn; realpath /bin/ls
+/etc/hostname
+/etc/hostname
+/usr/bin/ls
+
+// chmod, chown
+$ touch /tmp/m; chmod 755 /tmp/m; ls -l /tmp/m
+-rwxr-xr-x 1 root root 0 Nov 17 12:00 /tmp/m
+$ chmod u-x,go= /tmp/m; ls -l /tmp/m
+-rw------- 1 root root 0 Nov 17 12:00 /tmp/m
+$ chmod +x /tmp/m; ls -l /tmp/m
+-rwx--x--x 1 root root 0 Nov 17 12:00 /tmp/m
+$ chmod 1777 /tmp/m; ls -l /tmp/m
+-rwxrwxrwt 1 root root 0 Nov 17 12:00 /tmp/m
+$ chmod bad /tmp/m
+chmod: invalid mode: 'bad'
+[exit 1]
+$ chown www-data:www-data /tmp/m; ls -l /tmp/m
+-rwxrwxrwt 1 www-data www-data 0 Nov 17 12:00 /tmp/m
+$ chattr -ia /tmp/m
+// stat, file, du
+$ stat /etc/hostname
+  File: /etc/hostname
+  Size: 13        	Blocks: 1          IO Block: 4096   regular file
+Device: 801h/2049d	Inode: 265091      Links: 1
+Access: (0644/-rw-r--r--)  Uid: (    0/    root)   Gid: (    0/    root)
+Access: 2026-07-05 07:42:00.000000000 +0000
+Modify: 2026-07-05 07:42:00.000000000 +0000
+Change: 2026-07-05 07:42:00.000000000 +0000
+ Birth: 2026-07-05 07:42:00.000000000 +0000
+$ stat -c '%n %a %U %s' /etc/shadow /tmp
+/etc/shadow 640 root 387
+/tmp 1777 root 4096
+$ file /etc/passwd /usr/bin/ls /tmp /var/backups/db_dump_2024-10-01.sql.gz /bin
+/etc/passwd: ASCII text
+/usr/bin/ls: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=3f1e0a4f2b8c6e2d7a9b1c0d5e4f3a2b1c0d9e8f, for GNU/Linux 3.2.0, stripped
+/tmp: directory
+/var/backups/db_dump_2024-10-01.sql.gz: gzip compressed data, from Unix
+/bin: symbolic link to usr/bin
+$ du -sh /etc/ssh
+16K	/etc/ssh
+
+// paths
+$ basename /usr/bin/ls; basename /tmp/x.sh .sh; dirname /usr/bin/ls
+ls
+x
+/usr/bin
+$ which ls sudo nosuch; whereis ls
+/usr/bin/ls
+/usr/bin/sudo
+ls: /usr/bin/ls /usr/share/man/man1/ls.1.gz
+
+@user admin
+$ chown admin /etc/passwd
+chown: changing ownership of '/etc/passwd': Operation not permitted
+[exit 1]
+$ chmod 777 /etc/passwd
+chmod: changing permissions of '/etc/passwd': Operation not permitted
+[exit 1]
+$ cp /etc/shadow /tmp/s
+cp: cannot open '/etc/shadow' for reading: Permission denied
+[exit 1]

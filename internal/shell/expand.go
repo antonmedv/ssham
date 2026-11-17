@@ -125,8 +125,8 @@ func (s *Shell) expandWord(ctx context.Context, raw string, split bool) []string
 		case "root":
 			e.addLit("/root", true)
 			i = end
-		case s.user:
-			e.addLit(s.home, true)
+		case s.user.Name:
+			e.addLit(s.user.Home, true)
 			i = end
 		}
 	}
@@ -250,7 +250,7 @@ func (e *expander) dollar(s string) (string, int, bool) {
 		if strings.HasPrefix(s, "$((") {
 			end := strings.Index(s, "))")
 			if end > 0 {
-				return arith(sh.expandOne(e.ctx, s[3:end]), sh), end + 2, false
+				return strconv.FormatInt(arith(sh.expandOne(e.ctx, s[3:end]), sh.getVar), 10), end + 2, false
 			}
 		}
 		n, err := skipQuoted(s)
@@ -324,50 +324,6 @@ func (e *expander) dollar(s string) (string, int, bool) {
 	return "$", 1, false
 }
 
-// arith evaluates a simple integer expression: numbers and variables joined
-// by + - * / %, left to right. That covers what scripts typically do.
-func arith(expr string, sh *Shell) string {
-	expr = strings.ReplaceAll(expr, " ", "")
-	total, op := 0, byte('+')
-	num := ""
-	apply := func() {
-		v, err := strconv.Atoi(num)
-		if err != nil {
-			v, _ = strconv.Atoi(sh.getVar(num))
-		}
-		switch op {
-		case '+':
-			total += v
-		case '-':
-			total -= v
-		case '*':
-			total *= v
-		case '/':
-			if v != 0 {
-				total /= v
-			}
-		case '%':
-			if v != 0 {
-				total %= v
-			}
-		}
-		num = ""
-	}
-	for i := 0; i < len(expr); i++ {
-		c := expr[i]
-		if strings.IndexByte("+-*/%", c) >= 0 && num != "" {
-			apply()
-			op = c
-			continue
-		}
-		num += string(c)
-	}
-	if num != "" {
-		apply()
-	}
-	return strconv.Itoa(total)
-}
-
 // glob expands a pattern against the virtual filesystem.
 func (s *Shell) glob(pat string) []string {
 	abs := strings.HasPrefix(pat, "/")
@@ -389,12 +345,12 @@ func (s *Shell) glob(pat string) []string {
 			if !hasMeta {
 				lit := unescapeGlob(part)
 				cand := joinGlob(b, lit)
-				if _, err := s.fs.Lstat(s.user, s.resolve(cand)); err == nil {
+				if _, err := s.fs.Lstat(s.user.Name, s.resolve(cand)); err == nil {
 					next = append(next, cand)
 				}
 				continue
 			}
-			entries, err := s.fs.ReadDir(s.user, dir)
+			entries, err := s.fs.ReadDir(s.user.Name, dir)
 			if err != nil {
 				continue
 			}

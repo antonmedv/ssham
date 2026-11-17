@@ -1,0 +1,42 @@
+// Running scripts.
+$ echo 'echo hello from $0 $1; whoami' > /tmp/s.sh; chmod +x /tmp/s.sh; /tmp/s.sh arg
+hello from /tmp/s.sh arg
+root
+$ cd /tmp; ./s.sh
+hello from ./s.sh
+root
+$ sh /tmp/s.sh x
+hello from /tmp/s.sh x
+root
+$ bash -c 'echo inline $0 $1; exit 4' name one
+inline name one
+[exit 4]
+$ echo 'echo piped' | sh
+piped
+$ echo 'exit 9' > /tmp/e.sh; sh /tmp/e.sh; echo $?
+9
+$ chmod -x /tmp/s.sh; /tmp/s.sh
+-bash: /tmp/s.sh: Permission denied
+[exit 126]
+$ /tmp
+-bash: /tmp: Is a directory
+[exit 126]
+$ /nope
+-bash: /nope: No such file or directory
+[exit 127]
+
+// Recursion is bounded.
+$ echo 'sh /tmp/r.sh' > /tmp/r.sh; sh /tmp/r.sh 2>&1 | tail -1
+-bash: /tmp/r.sh: maximum nesting level exceeded
+
+// Dropped binaries crash; stock ones run.
+$ printf '\177ELFbinary' > /tmp/bot; chmod +x /tmp/bot; /tmp/bot -c 1
+Segmentation fault (core dumped)
+[exit 139]
+$ /usr/bin/whoami
+root
+$ /bin/echo via path
+via path
+$ rm /usr/bin/ls; ls
+ls: command not found
+[exit 127]

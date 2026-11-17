@@ -23,6 +23,8 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/antonmedv/ssham/internal/audit"
+	"github.com/antonmedv/ssham/internal/commands"
+	"github.com/antonmedv/ssham/internal/rootfs"
 	"github.com/antonmedv/ssham/internal/shell"
 	"github.com/antonmedv/ssham/internal/tui"
 	"github.com/antonmedv/ssham/internal/vfs"
@@ -46,7 +48,7 @@ type Config struct {
 type Server struct {
 	cfg    Config
 	base   *vfs.FS
-	host   vfs.Host
+	host   rootfs.Host
 	active atomic.Int64
 	ssh    *ssh.Server
 }
@@ -64,8 +66,13 @@ func New(cfg Config) (*Server, error) {
 		cfg.MaxSessions = 64
 	}
 	booted := time.Now().Add(-time.Duration(30+randInt(60))*24*time.Hour - time.Duration(randInt(86400))*time.Second)
-	host := vfs.Host{Hostname: cfg.Hostname, Kernel: cfg.Kernel, Booted: booted}
-	s := &Server{cfg: cfg, host: host, base: vfs.NewBase(host)}
+	host := rootfs.Host{Hostname: cfg.Hostname, Kernel: cfg.Kernel, Booted: booted}
+	base, err := rootfs.Build(host)
+	if err != nil {
+		return nil, err
+	}
+	shell.Install(base, commands.Registry())
+	s := &Server{cfg: cfg, host: host, base: base}
 
 	srv, err := wish.NewServer(
 		wish.WithAddress(cfg.Addr),
@@ -81,7 +88,7 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	srv.ConnCallback = func(ctx ssh.Context, conn net.Conn) net.Conn {
-		cfg.Audit.Event("connect", "remote", conn.RemoteAddr().String())
+		cfg.Audit.Event(audit.Connect, "remote", conn.RemoteAddr().String())
 		return conn
 	}
 	s.ssh = srv
@@ -131,7 +138,7 @@ func (s *Server) authEvent(ctx ssh.Context, method string, success bool, attrs .
 		"method", method,
 		"success", success,
 	}
-	s.cfg.Audit.Event("auth", append(base, attrs...)...)
+	s.cfg.Audit.Event(audit.Auth, append(base, attrs...)...)
 }
 
 func (s *Server) passwordAuth(ctx ssh.Context, password string) bool {
@@ -168,7 +175,7 @@ func (s *Server) middleware(next ssh.Handler) ssh.Handler {
 
 		if n := s.active.Add(1); n > int64(s.cfg.MaxSessions) {
 			s.active.Add(-1)
-			slog.Event("session_rejected", "reason", "max sessions")
+			slog.Event(audit.SessionRejected, "reason", "max sessions")
 			_ = sess.Exit(1)
 			return
 		}
@@ -176,7 +183,7 @@ func (s *Server) middleware(next ssh.Handler) ssh.Handler {
 
 		pty, winCh, isPty := sess.Pty()
 		start := time.Now()
-		slog.Event("session_start",
+		slog.Event(audit.SessionStart,
 			"user", sess.User(),
 			"client_version", sess.Context().ClientVersion(),
 			"pty", isPty,
@@ -192,6 +199,7 @@ func (s *Server) middleware(next ssh.Handler) ssh.Handler {
 			Host:     s.host,
 			User:     sanitizeUser(sess.User()),
 			FS:       s.base.Clone(),
+			Commands: commands.Registry(),
 			Log:      slog,
 			ClientIP: clientIP,
 			Started:  start,
@@ -210,14 +218,14 @@ func (s *Server) middleware(next ssh.Handler) ssh.Handler {
 		default:
 			code = s.runPiped(ctx, sess, cfg)
 		}
-		slog.Event("session_end", "exit_code", code, "duration_s", time.Since(start).Seconds())
+		slog.Event(audit.SessionEnd, "exit_code", code, "duration_s", time.Since(start).Seconds())
 		_ = sess.Exit(code)
 	}
 }
 
 // runExec handles `ssh host 'command'`.
 func (s *Server) runExec(ctx context.Context, sess ssh.Session, cfg shell.Config, slog *audit.SessionLogger) int {
-	slog.Event("input", "line", sess.RawCommand(), "mode", "exec")
+	slog.Event(audit.Input, "line", sess.RawCommand(), "mode", "exec")
 	sh := shell.New(cfg, &plainTerm{w: sess, r: bufio.NewReader(sess)})
 	out, code := sh.Capture(ctx, sess.RawCommand(), io.LimitReader(sess, 1<<20))
 	if _, _, isPty := sess.Pty(); isPty {

@@ -1,0 +1,85 @@
+$ ls /
+bin   dev  home  lib64  mnt  proc  run   snap  sys  usr
+boot  etc  lib   media  opt  root  sbin  srv   tmp  var
+$ ls -la /root
+total 24
+drwx------  3 root root 4096 Jul  5 07:42 .
+drwxr-xr-x 18 root root 4096 Jul  5 07:42 ..
+-rw-------  1 root root  121 Jul  5 07:42 .bash_history
+-rw-r--r--  1 root root  572 Jul  5 07:42 .bashrc
+-rw-r--r--  1 root root  161 Jul  5 07:42 .profile
+drwx------  2 root root 4096 Jul  5 07:42 .ssh
+$ ls -l /bin /usr/bin/sudo
+lrwxrwxrwx 1 root root      7 Jul  5 07:42 /bin -> usr/bin
+-rwsr-xr-x 1 root root 253020 Jul 20 12:00 /usr/bin/sudo
+$ ls -lh /etc/passwd /var/log
+-rw-r--r-- 1 root root 1.3K Jul  5 07:42 /etc/passwd
+
+/var/log:
+total 4.0K
+-rw-r----- 1 root root   0 Jul  5 07:42 auth.log
+-rw-r--r-- 1 root root 122 Jul  5 07:42 dpkg.log
+-rw-rw-r-- 1 root root   0 Jul  5 07:42 lastlog
+-rw-r----- 1 root root   0 Jul  5 07:42 syslog
+$ ls -1 /home
+ubuntu
+$ ls -d /tmp /etc
+/etc  /tmp
+$ ls -F /root/.ssh /usr/bin/ls /bin
+/usr/bin/ls*
+
+/root/.ssh:
+authorized_keys
+
+/bin:
+[*         date*     groups*       lscpu*     pwd*        ssh*        uptime*
+apt*       dd*       gunzip*       md5sum*    python3*    stat*       vi*
+apt-get*   df*       gzip*         mkdir*     readlink*   su*         vim*
+awk*       diff*     head*         more*      realpath*   sudo*       w*
+base64*    dir*      hostname*     mount*     reset*      systemctl*  wc*
+basename*  dirname*  hostnamectl*  mv*        rev*        tail*       wget*
+bash*      dmesg*    htop*         nano*      rm*         tar*        whereis*
+cat*       du*       id*           nc*        rmdir*      tee*        which*
+chattr*    echo*     ip*           netstat*   scp*        telnet*     who*
+chgrp*     egrep*    kill*         nohup*     sed*        test*       whoami*
+chmod*     env*      killall*      nproc*     seq*        timeout*    xargs*
+chown*     false*    last*         passwd*    sh*         top*        yes*
+clear*     fgrep*    less*         perl*      sha1sum*    touch*
+cp*        file*     ln*           ping*      sha256sum*  tr*
+crontab*   find*     ls*           pkill*     shred*      true*
+curl*      free*     lsattr*       printenv*  sleep*      uname*
+cut*       gawk*     lsb_release*  printf*    sort*       uniq*
+dash*      grep*     lsblk*        ps*        ss*         unzip*
+$ ls -n /home/ubuntu
+total 0
+$ ls -R /root/.ssh
+/root/.ssh:
+authorized_keys
+$ ls /nope
+ls: cannot access '/nope': No such file or directory
+[exit 2]
+$ ls /etc/passwd | cat
+/etc/passwd
+$ mkdir -p /tmp/a/b && touch /tmp/a/b/c /tmp/a/z && ls -R /tmp/a
+/tmp/a:
+b  z
+
+/tmp/a/b:
+c
+$ ls -t /tmp/a
+b  z
+$ ls -r /tmp/a
+z  b
+
+@user admin
+$ ls
+$ ls -la
+total 20
+drwxr-x--- 2 admin admin 4096 Oct 11 12:00 .
+drwxr-xr-x 4 root  root  4096 Jul  5 07:42 ..
+-rw-r--r-- 1 admin admin   62 Oct 11 12:00 .bash_logout
+-rw-r--r-- 1 admin admin  572 Oct 11 12:00 .bashrc
+-rw-r--r-- 1 admin admin   13 Oct 11 12:00 .profile
+$ ls /root
+ls: cannot open directory '/root': Permission denied
+[exit 2]

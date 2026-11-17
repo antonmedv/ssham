@@ -1,0 +1,62 @@
+// Quoting and word splitting.
+$ echo hello   world
+hello world
+$ echo "a  b" 'c $HOME' $HOME
+a  b c $HOME /root
+$ echo "double \"quoted\" \$HOME" 'single \n'
+double "quoted" $HOME single \n
+$ echo a\ b\\c
+a b\c
+$ echo ''
+
+$ echo "" | wc -c
+1
+$ echo 'unterminated
+-bash: syntax error near unexpected token `newline'
+[exit 2]
+
+// Variables.
+$ X=5; echo "x=$X" ${X} ${Y:-default} ${#HOME}
+x=5 5 default 5
+$ X=1 env | grep '^X='
+X=1
+$ echo $X
+5
+$ unset X; echo "[$X]"
+[]
+$ echo $SHELL $USER $HOME $PWD
+/bin/bash root /root /root
+$ echo $UID $HOSTNAME
+0 ip-10-0-2-15
+$ A="one two"; echo $A
+one two
+$ false; echo $?
+1
+$ nosuchcommand; echo $?
+nosuchcommand: command not found
+127
+
+// Command substitution and arithmetic.
+$ echo $(echo nested) `echo tick`
+nested tick
+$ echo "$(echo a; echo b)"
+a
+b
+$ echo $(echo a; echo b)
+a b
+$ echo $((2 + 3 * 4)) $((10 / 3)) $((7 % 4))
+14 3 3
+$ echo ${HOME}/x ~ ~/sub ~root
+/root/x /root /root/sub /root
+
+// Globbing.
+$ echo /etc/host*
+/etc/hostname /etc/hosts
+$ echo /etc/nothing*
+/etc/nothing*
+$ echo '/etc/host*' "/etc/host*"
+/etc/host* /etc/host*
+$ cd /etc && echo *.conf
+resolv.conf
+$ ls -d /usr/*bin
+/usr/bin  /usr/sbin

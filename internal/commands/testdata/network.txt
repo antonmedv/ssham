@@ -1,0 +1,85 @@
+$ ping -c 2 8.8.8.8
+PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.
+64 bytes from 8.8.8.8: icmp_seq=1 ttl=57 time=32.7 ms
+64 bytes from 8.8.8.8: icmp_seq=2 ttl=57 time=33.6 ms
+
+--- 8.8.8.8 ping statistics ---
+2 packets transmitted, 2 received, 0% packet loss, time 1000ms
+rtt min/avg/max/mdev = 31.934/33.142/33.934/0.400 ms
+$ ping -c 1 github.com
+PING github.com (64.24.54.74) 56(84) bytes of data.
+64 bytes from github.com (64.24.54.74): icmp_seq=1 ttl=50 time=20.1 ms
+
+--- github.com ping statistics ---
+1 packets transmitted, 1 received, 0% packet loss, time 0ms
+rtt min/avg/max/mdev = 18.145/20.092/20.145/0.400 ms
+$ ping
+ping: usage error: Destination address required
+[exit 1]
+$ ifconfig | head -3
+docker0: flags=4099<UP,BROADCAST,MULTICAST>  mtu 1500
+        inet 172.17.0.1  netmask 255.255.0.0  broadcast 172.17.255.255
+        ether 02:42:7c:1e:9a:3f  txqueuelen 0  (Ethernet)
+$ ip a | grep inet
+    inet 127.0.0.1/8 scope host lo
+    inet6 ::1/128 scope host noprefixroute
+    inet 10.0.2.15/24 metric 100 brd 10.0.2.255 scope global dynamic ens5
+    inet6 fe80::8a3:5ff:fe2c:7d41/64 scope link
+    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0
+$ ip r
+default via 10.0.2.1 dev ens5 proto dhcp src 10.0.2.15 metric 100
+10.0.2.0/24 dev ens5 proto kernel scope link src 10.0.2.15 metric 100
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 linkdown
+$ ip
+Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }
+where  OBJECT := { address | link | neigh | route | rule | tunnel | ... }
+[exit 255]
+$ netstat -tlnp
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State      PID/Program name    
+tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      512/systemd-resolve
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      745/nginx: master p
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      702/sshd: /usr/sbin
+tcp        0      0 127.0.0.1:3306          0.0.0.0:*               LISTEN      -
+$ ss -tln
+Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:Port Process
+tcp   LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*
+tcp   LISTEN 0      511          0.0.0.0:80          0.0.0.0:*
+tcp   LISTEN 0      4096         0.0.0.0:22          0.0.0.0:*
+tcp   LISTEN 0      151        127.0.0.1:3306        0.0.0.0:*
+tcp   ESTAB  0      0          10.0.2.15:22       203.0.113.9:55081
+$ ssh root@10.0.0.5
+ssh: connect to host 10.0.0.5 port 22: Connection timed out
+[exit 255]
+$ scp x root@10.0.0.5:/tmp
+ssh: connect to host 10.0.0.5 port 22: Connection timed out
+scp: Connection closed
+[exit 255]
+$ nc -zv 10.0.0.5 22
+nc: connect to 10.0.0.5 port 22 (tcp) failed: Connection refused
+[exit 1]
+$ telnet 10.0.0.5
+Trying 10.0.0.5...
+telnet: Unable to connect to remote host: Connection refused
+[exit 1]
+$ iptables -L
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain FORWARD (policy DROP)
+target     prot opt source               destination         
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+@user admin
+$ iptables -F
+iptables v1.8.10 (nf_tables): Could not fetch rule set generation id: Permission denied (you must be root)
+[exit 4]
+$ netstat -tlnp
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State      PID/Program name    
+tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      -
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      -
+tcp        0      0 127.0.0.1:3306          0.0.0.0:*               LISTEN      -
