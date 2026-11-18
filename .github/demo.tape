@@ -6,7 +6,7 @@ Output .github/demo.gif
 
 Require go
 Require ssh
-Require jq
+Require fx
 
 Set Shell bash
 Set FontSize 18
@@ -58,11 +58,16 @@ Enter
 Sleep 1s
 
 # Now look at what ssham wrote down.
-Type "jq -c '{msg, user, password, line, url} | del(..|nulls)' ssham.jsonl"
+Type "fx ssham.jsonl"
+Sleep 500ms
+Enter
+Sleep 2s
+Type "/download"
 Sleep 500ms
 Enter
 Sleep 5s
 
 Hide
+Type "q"
 Type "kill %1; rm -rf $d"
 Enter
