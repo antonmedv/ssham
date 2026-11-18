@@ -2,6 +2,8 @@
 
 A fake SSH server that catches bots.
 
+![A bot logs in, downloads malware, and ssham records it all](.github/demo.gif)
+
 Bots log in with the usual default passwords (`root`/`xc3511`, `admin`/`admin`, ...). They
 get the BusyBox shell of a cheap IP camera, but nothing is real: every command is faked, files live in memory, and nothing
 ever runs on your machine.
